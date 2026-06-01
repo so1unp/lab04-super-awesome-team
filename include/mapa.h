@@ -3,66 +3,10 @@
 
 #include <pthread.h>
 #include "config.h"
-
-/* ─── Tipos de celda ───────────────────────────────────────────────────── */
-typedef enum {
-    CELDA_VACIA     = '.',
-    CELDA_NAVE      = '@',
-    CELDA_ESTACION  = 'E',
-    CELDA_ASTEROIDE = '*',
-    CELDA_NAVE_MUERTA = 'X'   /* nave desactivada (saqueble) */
-} TipoCelda;
-
-/* ─── Estados de objetos ───────────────────────────────────────────────── */
-typedef enum {
-    ESTADO_ACTIVO      = 0,
-    ESTADO_DESACTIVADO = 1
-} Estado;
-
-/* ─── Tipos de cliente ─────────────────────────────────────────────────── */
-typedef enum {
-    CLIENTE_NAVE    = 0,
-    CLIENTE_ESTACION = 1
-} TipoCliente;
-
-/* ─── Asteroide ────────────────────────────────────────────────────────── */
-typedef struct {
-    int fila;
-    int col;
-    int deuterio;
-    int mutexio;
-    int semaforita;
-    int kernelio;
-    Estado estado;  /* ESTADO_DESACTIVADO cuando queda sin recursos */
-} Asteroide;
-
-/* ─── Nave ─────────────────────────────────────────────────────────────── */
-typedef struct {
-    int fila;
-    int col;
-    int combustible;
-    int oxigeno;
-    /* inventario de recursos recolectados */
-    int deuterio;
-    int mutexio;
-    int semaforita;
-    int kernelio;
-    Estado estado;
-    int pid;
-    int id;  /* indice en la tabla de naves del servidor */
-} Nave;
-
-/* ─── Estacion ─────────────────────────────────────────────────────────── */
-typedef struct {
-    int fila;
-    int col;
-    int combustible;
-    /* PIDs de las naves actualmente en el hangar (0 = libre) */
-    int hangar[3];
-    Estado estado;
-    int pid;
-    int id;  /* indice en la tabla de estaciones del servidor */
-} Estacion;
+#include "tipos.h"
+#include "nave.h"
+#include "estacion.h"
+#include "asteroide.h"
 
 /* ─── Celda del mapa ───────────────────────────────────────────────────── */
 typedef struct {

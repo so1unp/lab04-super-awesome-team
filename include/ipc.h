@@ -2,7 +2,7 @@
 #define IPC_H
 
 #include <sys/types.h>
-#include "mapa.h"
+#include "tipos.h"
 
 /* ─── Nombres de recursos IPC (creados por el servidor) ───────────────── */
 
