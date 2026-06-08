@@ -26,3 +26,6 @@ intervalo_oxigeno_nave = 5
 
 # Segundos entre cada decremento de combustible en la estacion
 intervalo_combustible_estacion = 10
+
+# Milisegundos entre cada refresco del radar (ncurses) en la nave (rango 10-5000)
+radar_refresh_ms = 100

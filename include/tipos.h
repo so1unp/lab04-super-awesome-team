@@ -22,14 +22,6 @@ typedef enum {
     CLIENTE_ESTACION = 1
 } TipoCliente;
 
-/* ─── Tipo de operacion en una transaccion nave ↔ estacion ───────────── */
-typedef enum {
-    OP_VENDER_DEUTERIO     = 0,
-    OP_VENDER_MUTEXIO      = 1,
-    OP_VENDER_SEMAFORITA   = 2,
-    OP_VENDER_KERNELIO     = 3,
-    OP_COMPRAR_COMBUSTIBLE = 4,
-    OP_COMPRAR_OXIGENO     = 5
-} TipoOperacion;
+/* TipoOperacion se define en ipc.h (es parte del protocolo de mensajes) */
 
 #endif /* TIPOS_H */
