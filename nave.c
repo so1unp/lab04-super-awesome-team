@@ -1,21 +1,23 @@
 /*
  * nave.c - Proceso cliente "nave espacial".
  *
- * Esta entrega cubre la task #27: hilo radar con visualizacion del mapa
- * usando ncurses, mas un panel de estado de la nave (combustible, oxigeno,
- * inventario).
+ * Implementa los hilos:
+ *   - radar (task #27): lee la SHM y dibuja mapa + panel de estado con ncurses.
+ *   - soporte vital (task #20): decrementa periodicamente el oxigeno de la nave
+ *     en la SHM (mapa->naves[id].oxigeno).
  *
  * Flujo del main:
- *   1. Carga config.txt (para obtener radar_refresh_ms).
- *   2. Abre la SHM /cosmikernel_mapa creada por el servidor (modo fallback
- *      si no existe: se crea una SHM local con datos de prueba para poder
- *      testear el radar sin depender del servidor).
+ *   1. Carga config.txt (radar_refresh_ms, intervalo_oxigeno_nave).
+ *   2. Abre la SHM /cosmikernel_mapa creada por el servidor. Si no existe
+ *      (modo standalone), la crea con datos demo para poder probar la nave
+ *      sin servidor.
  *   3. Intenta registrarse contra el servidor v\xc3\xada MQ_REGISTRO_NAME para
  *      obtener su id en Mapa.naves[]. Si la cola no existe, usa id=0.
- *   4. Inicializa ncurses, instala handler de SIGINT y lanza el hilo radar.
- *   5. Espera a que se levante la bandera de salida; limpia recursos.
+ *   4. Inicializa ncurses, instala handler de SIGINT.
+ *   5. Lanza los hilos radar y soporte_vital.
+ *   6. Espera a que se levante la bandera de salida; limpia recursos.
  *
- * Compilar (POSIX, Linux): gcc nave.c src/config.o -lncurses -lpthread -lrt -o bin/nave
+ * Compilar (POSIX, Linux): make
  */
 
 #include <errno.h>
@@ -48,6 +50,13 @@ typedef struct {
     int   refresh_ms;
 } RadarArgs;
 
+/* Argumentos pasados al hilo de soporte vital. */
+typedef struct {
+    Mapa *mapa;
+    int   id_nave;
+    int   intervalo_seg;
+} VitalArgs;
+
 /* ─── Handler de SIGINT ───────────────────────────────────────────────── */
 
 static void manejar_sigint(int sig)
@@ -60,8 +69,8 @@ static void manejar_sigint(int sig)
 
 /*
  * Abre la SHM creada por el servidor en /cosmikernel_mapa.
- * Si no existe (modo standalone para testear el radar sin servidor),
- * crea una SHM propia con datos de prueba.
+ * Si no existe (modo standalone para testear sin servidor), crea una SHM
+ * propia con datos de prueba.
  *
  * Devuelve el puntero al Mapa mapeado o NULL si falla.
  * En *creada_por_mi se indica si esta nave creo la SHM (para limpiarla al salir).
@@ -78,7 +87,7 @@ static Mapa *abrir_shm_mapa(int *creada_por_mi)
     if (fd == -1 && errno == ENOENT)
     {
         /* Fallback: el servidor no esta corriendo. Creo una SHM local
-         * y la inicializo con datos demo para poder probar el radar. */
+         * y la inicializo con datos demo para poder probar la nave. */
         fprintf(stderr, "nave: servidor no detectado, modo standalone (SHM demo)\n");
         fd = shm_open(SHM_MAPA_NAME, O_RDWR | O_CREAT, 0666);
         if (fd == -1) { perror("shm_open(create)"); return NULL; }
@@ -207,7 +216,46 @@ static int registrar_nave(void)
     return id;
 }
 
-/* ─── Hilo radar ──────────────────────────────────────────────────────── */
+/* ─── Hilo soporte vital (task #20) ───────────────────────────────────── */
+
+/*
+ * Decrementa el oxigeno de la nave en la SHM cada `intervalo_seg` segundos.
+ * Cuando el oxigeno llega a 0, marca la nave como DESACTIVADA (el servidor
+ * actualizara la celda del mapa cuando detecte el cambio de estado).
+ *
+ * Nota: usa el mutex process-shared del mapa para sincronizar con el
+ * servidor y los demas hilos.
+ */
+static void *hilo_soporte_vital(void *arg)
+{
+    VitalArgs *args = (VitalArgs *)arg;
+    Mapa *mapa = args->mapa;
+    int id = args->id_nave;
+
+    while (!g_salir)
+    {
+        /* Dormimos 1 segundo a la vez para poder reaccionar rapido a g_salir. */
+        int segundos_restantes = args->intervalo_seg;
+        while (segundos_restantes > 0 && !g_salir)
+        {
+            sleep(1);
+            segundos_restantes--;
+        }
+        if (g_salir) break;
+
+        pthread_mutex_lock(&mapa->mutex);
+        if (mapa->naves[id].oxigeno > 0)
+        {
+            mapa->naves[id].oxigeno--;
+            if (mapa->naves[id].oxigeno == 0)
+                mapa->naves[id].estado = ESTADO_DESACTIVADO;
+        }
+        pthread_mutex_unlock(&mapa->mutex);
+    }
+    return NULL;
+}
+
+/* ─── Hilo radar (task #27) ───────────────────────────────────────────── */
 
 /*
  * Dibuja el mapa y el panel de estado periodicamente.
@@ -319,25 +367,17 @@ static void *hilo_radar(void *arg)
 }
 
 /* ─── main ────────────────────────────────────────────────────────────── */
-#include <ncurses.h>
-#include <pthread.h>
-#include <unistd.h>
-#include "include/nave.h"
-#include "include/config.h"
 
-Nave miNave;
-
-pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-
-void *decrementar(void *arg)
+int main(int argc, char *argv[])
 {
     const char *config_path = (argc > 1) ? argv[1] : CONFIG_PATH;
     Config cfg;
     Mapa *mapa = NULL;
     int creada_por_mi = 0;
     int id_nave;
-    pthread_t th_radar;
+    pthread_t th_radar, th_vital;
     RadarArgs radar_args;
+    VitalArgs vital_args;
     struct sigaction sa;
     char nombre_cola_propia[MQ_NAVE_NAME_LEN];
 
@@ -349,7 +389,7 @@ void *decrementar(void *arg)
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = manejar_sigint;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;  /* sin SA_RESTART: queremos cortar nanosleep en el radar */
+    sa.sa_flags = 0;  /* sin SA_RESTART: queremos cortar nanosleep/sleep */
     sigaction(SIGINT,  &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
@@ -388,7 +428,7 @@ void *decrementar(void *arg)
         return EXIT_FAILURE;
     }
 
-    /* 6) Lanzar hilo radar. */
+    /* 6) Lanzar hilos. */
     radar_args.mapa = mapa;
     radar_args.id_nave = id_nave;
     radar_args.refresh_ms = cfg.radar_refresh_ms;
@@ -402,8 +442,24 @@ void *decrementar(void *arg)
         return EXIT_FAILURE;
     }
 
-    /* 7) Esperar a que el hilo radar termine (cuando g_salir = 1). */
+    vital_args.mapa = mapa;
+    vital_args.id_nave = id_nave;
+    vital_args.intervalo_seg = cfg.intervalo_oxigeno_nave;
+    if (pthread_create(&th_vital, NULL, hilo_soporte_vital, &vital_args) != 0)
+    {
+        g_salir = 1;
+        pthread_join(th_radar, NULL);
+        endwin();
+        perror("pthread_create(soporte_vital)");
+        munmap(mapa, sizeof(Mapa));
+        if (creada_por_mi) shm_unlink(SHM_MAPA_NAME);
+        mq_unlink(nombre_cola_propia);
+        return EXIT_FAILURE;
+    }
+
+    /* 7) Esperar a que ambos hilos terminen (cuando g_salir = 1). */
     pthread_join(th_radar, NULL);
+    pthread_join(th_vital, NULL);
 
     /* 8) Cleanup ncurses. */
     endwin();
@@ -415,83 +471,4 @@ void *decrementar(void *arg)
 
     printf("nave: saliendo limpiamente\n");
     return EXIT_SUCCESS;
-}
-    while (1)
-    {
-        sleep(DEFAULT_INTERVALO_OXIGENO);
-        // usleep(500000);
-
-        pthread_mutex_lock(&mutex);
-
-        if (miNave.oxigeno > 0)
-            miNave.oxigeno--;
-
-        pthread_mutex_unlock(&mutex);
-    }
-
-    return NULL;
-}
-
-int main()
-{
-    pthread_t hilo;
-    miNave.oxigeno = NAVE_OXIGENO_INICIAL;
-
-    pthread_create(&hilo, NULL, decrementar, NULL);
-
-    initscr();
-    cbreak();
-    noecho();
-    keypad(stdscr, TRUE);
-    curs_set(0);
-
-    int startx, starty, width, height;
-    int screen_height, screen_width;
-
-    getmaxyx(stdscr, screen_height, screen_width);
-
-    height = screen_height / 2;
-    width = screen_width / 2;
-
-    starty = (screen_height - height) / 2;
-    startx = (screen_width - width) / 2;
-
-    WINDOW *ventana = newwin(height, width, starty, startx);
-    box(ventana, 0, 0);
-    wrefresh(ventana);
-
-    while (1)
-    {
-        pthread_mutex_lock(&mutex);
-        int valor = miNave.oxigeno;
-        pthread_mutex_unlock(&mutex);
-
-        wclear(ventana);
-
-        mvwprintw(ventana, 1, 2, "Oxigeno: %d", valor);
-        mvwprintw(ventana, 2, 2, "ENTER = reiniciar a 100");
-        mvwprintw(ventana, 3, 2, "q = salir");
-        box(ventana, 0, 0);
-        wrefresh(ventana);
-
-        wtimeout(ventana, 100); // getch espera 100 ms
-
-        int tecla = wgetch(ventana);
-
-        if (tecla == '\n' || tecla == KEY_ENTER)
-        {
-            pthread_mutex_lock(&mutex);
-            miNave.oxigeno = NAVE_OXIGENO_INICIAL;
-            pthread_mutex_unlock(&mutex);
-        }
-        else if (tecla == 'q')
-        {
-            break;
-        }
-    }
-
-    delwin(ventana);
-    endwin();
-
-    return 0;
 }

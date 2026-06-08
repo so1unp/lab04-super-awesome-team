@@ -1,8 +1,7 @@
 CC=gcc
 BIN=./bin
-
-CFLAGS=-g -Wall -Wextra -Wshadow -Wconversion -Wunreachable-code -lncurses
-
+SRC=./src
+CFLAGS=-g -Wall -Wextra -Wshadow -Wconversion -Wunreachable-code -Iinclude
 
 # Librerias necesarias:
 #  -lpthread : hilos POSIX (todos los procesos usan pthread_mutex/threads)
@@ -17,8 +16,6 @@ LIST=$(addprefix $(BIN)/, $(PROG))
 
 # Objetos compartidos compilados desde src/
 SHARED_OBJS=$(SRC)/config.o $(SRC)/shm.o
-
-LIBS=-lrt -lpthread
 
 .PHONY: all
 all: $(LIST)
@@ -35,13 +32,6 @@ $(BIN)/nave: nave.c $(SHARED_OBJS)
 
 $(BIN)/estacion: estacion.c $(SHARED_OBJS)
 	$(CC) -o $@ $^ $(CFLAGS) $(LDLIBS_COMMON)
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
-
-$(BIN)/nave: nave.c $(SHARED_OBJS)
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
-
-$(BIN)/estacion: estacion.c $(SHARED_OBJS)
-	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
 
 test:
 	@./test.sh ||:

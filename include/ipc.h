@@ -35,6 +35,16 @@
 /* Cola de registro: las naves y estaciones se registran al servidor aqui */
 #define MQ_REGISTRO_NAME "/cosmikernel_registro"
 
+/* ─── Tipos de operacion en transacciones nave ↔ estacion ─────────────── */
+typedef enum {
+    OP_VENDER_DEUTERIO     = 0,
+    OP_VENDER_MUTEXIO      = 1,
+    OP_VENDER_SEMAFORITA   = 2,
+    OP_VENDER_KERNELIO     = 3,
+    OP_COMPRAR_COMBUSTIBLE = 4,
+    OP_COMPRAR_OXIGENO     = 5
+} TipoOperacion;
+
 /* ─── Mensajes IPC ─────────────────────────────────────────────────────── */
 
 /*
