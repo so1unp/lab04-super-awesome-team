@@ -1,0 +1,28 @@
+# Configuracion de CosmiKernel
+# Lineas que empiezan con '#' son comentarios.
+# Formato: clave = valor
+
+# Numero de estaciones espaciales en el mapa (maximo 3)
+num_estaciones = 2
+
+# Numero de asteroides presentes al mismo tiempo en el mapa (maximo 20)
+num_asteroides = 8
+
+# Precios de los minerales (lo que paga la estacion por unidad)
+precio_deuterio   = 10
+precio_mutexio    = 20
+precio_semaforita = 15
+precio_kernelio   = 25
+
+# Precio del combustible y oxigeno (lo que cobra la estacion por unidad)
+precio_combustible = 12
+precio_oxigeno     = 8
+
+# Umbral de combustible de la estacion para enviar alerta a las naves
+umbral_combustible_estacion = 30
+
+# Segundos entre cada decremento de oxigeno en la nave
+intervalo_oxigeno_nave = 5
+
+# Segundos entre cada decremento de combustible en la estacion
+intervalo_combustible_estacion = 10
