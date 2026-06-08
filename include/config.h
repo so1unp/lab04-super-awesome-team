@@ -13,7 +13,7 @@
 #define DEFAULT_PRECIO_COMBUSTIBLE     12
 #define DEFAULT_PRECIO_OXIGENO         8
 #define DEFAULT_UMBRAL_COMBUSTIBLE     30
-#define DEFAULT_INTERVALO_OXIGENO      5   /* segundos entre decrementos de oxigeno en nave */
+#define DEFAULT_INTERVALO_OXIGENO      1   /* segundos entre decrementos de oxigeno en nave */
 #define DEFAULT_INTERVALO_COMBUSTIBLE  10  /* segundos entre decrementos de combustible en estacion */
 
 /* Limites del juego */
