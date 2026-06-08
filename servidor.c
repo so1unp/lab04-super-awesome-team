@@ -16,7 +16,8 @@ int main(int argc, char *argv[])
     config_print(&cfg);
 
     mapa = shm_crear(&cfg);
-    if (mapa == NULL) {
+    if (mapa == NULL)
+    {
         fprintf(stderr, "servidor: error al crear la memoria compartida\n");
         exit(EXIT_FAILURE);
     }
