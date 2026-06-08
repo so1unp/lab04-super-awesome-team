@@ -15,6 +15,7 @@
 #define DEFAULT_UMBRAL_COMBUSTIBLE     30
 #define DEFAULT_INTERVALO_OXIGENO      1   /* segundos entre decrementos de oxigeno en nave */
 #define DEFAULT_INTERVALO_COMBUSTIBLE  10  /* segundos entre decrementos de combustible en estacion */
+#define DEFAULT_RADAR_REFRESH_MS       100 /* milisegundos entre refrescos del radar (ncurses) */
 
 /* Limites del juego */
 #define MAX_ESTACIONES  3
@@ -40,6 +41,7 @@ typedef struct {
     int umbral_combustible_estacion;
     int intervalo_oxigeno_nave;        /* segundos */
     int intervalo_combustible_estacion; /* segundos */
+    int radar_refresh_ms;              /* milisegundos entre refrescos del radar */
 } Config;
 
 /*

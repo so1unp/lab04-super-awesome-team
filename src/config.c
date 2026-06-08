@@ -17,6 +17,7 @@ static void config_defaults(Config *cfg)
     cfg->umbral_combustible_estacion = DEFAULT_UMBRAL_COMBUSTIBLE;
     cfg->intervalo_oxigeno_nave = DEFAULT_INTERVALO_OXIGENO;
     cfg->intervalo_combustible_estacion = DEFAULT_INTERVALO_COMBUSTIBLE;
+    cfg->radar_refresh_ms = DEFAULT_RADAR_REFRESH_MS;
 }
 
 /*
@@ -58,6 +59,8 @@ static int config_parse_line(const char *line, Config *cfg)
         cfg->intervalo_oxigeno_nave = val;
     else if (strcmp(key, "intervalo_combustible_estacion") == 0)
         cfg->intervalo_combustible_estacion = val;
+    else if (strcmp(key, "radar_refresh_ms") == 0)
+        cfg->radar_refresh_ms = val;
     else
         return 0;
 
@@ -100,6 +103,12 @@ static void config_validate(Config *cfg)
         cfg->intervalo_oxigeno_nave = DEFAULT_INTERVALO_OXIGENO;
     if (cfg->intervalo_combustible_estacion <= 0)
         cfg->intervalo_combustible_estacion = DEFAULT_INTERVALO_COMBUSTIBLE;
+    if (cfg->radar_refresh_ms < 10 || cfg->radar_refresh_ms > 5000)
+    {
+        fprintf(stderr, "config: radar_refresh_ms invalido (%d), usando %d\n",
+                cfg->radar_refresh_ms, DEFAULT_RADAR_REFRESH_MS);
+        cfg->radar_refresh_ms = DEFAULT_RADAR_REFRESH_MS;
+    }
 }
 
 int config_load(const char *path, Config *cfg)
@@ -138,5 +147,6 @@ void config_print(const Config *cfg)
     printf("  umbral_combustible_estacion = %d\n", cfg->umbral_combustible_estacion);
     printf("  intervalo_oxigeno_nave      = %d s\n", cfg->intervalo_oxigeno_nave);
     printf("  intervalo_combustible_est   = %d s\n", cfg->intervalo_combustible_estacion);
+    printf("  radar_refresh_ms            = %d ms\n", cfg->radar_refresh_ms);
     printf("=====================\n");
 }
