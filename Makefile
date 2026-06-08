@@ -1,6 +1,6 @@
 CC=gcc
 BIN=./bin
-CFLAGS=-g -Wall -Wextra -Wshadow -Wconversion -Wunreachable-code
+CFLAGS=-g -Wall -Wextra -Wshadow -Wconversion -Wunreachable-code -lncurses
 
 PROG=nave estacion servidor
 
