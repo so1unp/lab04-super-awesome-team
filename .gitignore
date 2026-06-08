@@ -66,3 +66,4 @@ dkms.conf
 # Binarios de los ejercicios
 bin/*
 !bin/.keep
+Modelo SO.excalidraw
