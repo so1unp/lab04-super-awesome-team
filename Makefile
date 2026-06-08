@@ -8,7 +8,9 @@ PROG=nave estacion servidor
 LIST=$(addprefix $(BIN)/, $(PROG))
 
 # Objetos compartidos compilados desde src/
-SHARED_OBJS=$(SRC)/config.o
+SHARED_OBJS=$(SRC)/config.o $(SRC)/shm.o
+
+LIBS=-lrt -lpthread
 
 .PHONY: all
 all: $(LIST)
@@ -18,13 +20,13 @@ $(SRC)/%.o: $(SRC)/%.c
 	$(CC) -c -o $@ $< $(CFLAGS)
 
 $(BIN)/servidor: servidor.c $(SHARED_OBJS)
-	$(CC) -o $@ $^ $(CFLAGS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
 
 $(BIN)/nave: nave.c $(SHARED_OBJS)
-	$(CC) -o $@ $^ $(CFLAGS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
 
 $(BIN)/estacion: estacion.c $(SHARED_OBJS)
-	$(CC) -o $@ $^ $(CFLAGS)
+	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
 
 test:
 	@./test.sh ||:
