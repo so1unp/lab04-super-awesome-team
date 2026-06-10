@@ -3,6 +3,7 @@
 #include "config.h"
 #include "shm.h"
 #include "ipc.h"
+#include "asteroides.h"
 
 int main(int argc, char *argv[])
 {
@@ -23,6 +24,9 @@ int main(int argc, char *argv[])
     }
 
     printf("servidor: shm '%s' creada (%zu bytes)\n", SHM_MAPA_NAME, sizeof(Mapa));
+
+    asteroides_inicializar(mapa, &cfg);
+    printf("servidor: %d asteroides colocados en el mapa\n", mapa->num_asteroides);
 
     // Agregar código aquí.
 
