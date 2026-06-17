@@ -11,7 +11,7 @@
  *   2. Abre la SHM /cosmikernel_mapa creada por el servidor. Si no existe
  *      (modo standalone), la crea con datos demo para poder probar la nave
  *      sin servidor.
- *   3. Intenta registrarse contra el servidor v\xc3\xada MQ_REGISTRO_NAME para
+ *   3. Intenta registrarse contra el servidor via MQ_REGISTRO_NAME para
  *      obtener su id en Mapa.naves[]. Si la cola no existe, usa id=0.
  *   4. Inicializa ncurses, instala handler de SIGINT.
  *   5. Lanza los hilos radar y soporte_vital.
