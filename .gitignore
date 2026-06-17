@@ -67,3 +67,5 @@ dkms.conf
 bin/*
 !bin/.keep
 Modelo SO.excalidraw
+config.bat
+node_modules
