@@ -23,11 +23,13 @@ static int posicion_aleatoria_libre(Mapa *mapa, int *fila_out, int *col_out)
 {
     const int max_intentos = MAPA_FILAS * MAPA_COLS * 2;
 
-    for (int i = 0; i < max_intentos; i++) {
+    for (int i = 0; i < max_intentos; i++)
+    {
         int fila = rand() % MAPA_FILAS;
-        int col  = rand() % MAPA_COLS;
+        int col = rand() % MAPA_COLS;
 
-        if (mapa->celdas[fila][col].tipo == CELDA_VACIA) {
+        if (mapa->celdas[fila][col].tipo == CELDA_VACIA)
+        {
             *fila_out = fila;
             *col_out = col;
             return 0;
@@ -39,7 +41,8 @@ static int posicion_aleatoria_libre(Mapa *mapa, int *fila_out, int *col_out)
 
 static int buscar_slot_nave(const Mapa *mapa)
 {
-    for (int i = 0; i < MAX_NAVES; i++) {
+    for (int i = 0; i < MAX_NAVES; i++)
+    {
         if (mapa->naves[i].pid == 0)
             return i;
     }
@@ -48,7 +51,8 @@ static int buscar_slot_nave(const Mapa *mapa)
 
 static int buscar_slot_estacion(const Mapa *mapa, int max_estaciones)
 {
-    for (int i = 0; i < max_estaciones; i++) {
+    for (int i = 0; i < max_estaciones; i++)
+    {
         if (mapa->estaciones[i].pid == 0)
             return i;
     }
@@ -57,7 +61,8 @@ static int buscar_slot_estacion(const Mapa *mapa, int max_estaciones)
 
 static int buscar_nave_por_pid(const Mapa *mapa, pid_t pid)
 {
-    for (int i = 0; i < MAX_NAVES; i++) {
+    for (int i = 0; i < MAX_NAVES; i++)
+    {
         if (mapa->naves[i].pid == pid)
             return i;
     }
@@ -66,7 +71,8 @@ static int buscar_nave_por_pid(const Mapa *mapa, pid_t pid)
 
 static int buscar_estacion_por_pid(const Mapa *mapa, pid_t pid, int max_estaciones)
 {
-    for (int i = 0; i < max_estaciones; i++) {
+    for (int i = 0; i < max_estaciones; i++)
+    {
         if (mapa->estaciones[i].pid == pid)
             return i;
     }
@@ -109,14 +115,17 @@ static void procesar_registrar(Mapa *mapa, const Config *cfg, const MsgRegistro 
     resp.error = 1;
     (void)snprintf(resp.shm_name, sizeof(resp.shm_name), "%s", SHM_MAPA_NAME);
 
-    if (posicion_aleatoria_libre(mapa, &fila, &col) != 0) {
+    if (posicion_aleatoria_libre(mapa, &fila, &col) != 0)
+    {
         responder_registro(req, &resp);
         return;
     }
 
-    if (req->tipo == CLIENTE_NAVE) {
+    if (req->tipo == CLIENTE_NAVE)
+    {
         slot = buscar_slot_nave(mapa);
-        if (slot < 0) {
+        if (slot < 0)
+        {
             responder_registro(req, &resp);
             return;
         }
@@ -130,13 +139,16 @@ static void procesar_registrar(Mapa *mapa, const Config *cfg, const MsgRegistro 
 
         mapa->celdas[fila][col].tipo = CELDA_NAVE;
         mapa->celdas[fila][col].idx = slot;
-    } else {
+    }
+    else
+    {
         int max_est = cfg->num_estaciones;
         if (max_est > MAX_ESTACIONES)
             max_est = MAX_ESTACIONES;
 
         slot = buscar_slot_estacion(mapa, max_est);
-        if (slot < 0) {
+        if (slot < 0)
+        {
             responder_registro(req, &resp);
             return;
         }
@@ -164,12 +176,14 @@ static void procesar_desregistrar(Mapa *mapa, const Config *cfg, const MsgRegist
 {
     int idx;
 
-    if (req->tipo == CLIENTE_NAVE) {
+    if (req->tipo == CLIENTE_NAVE)
+    {
         idx = req->id >= 0 ? req->id : buscar_nave_por_pid(mapa, req->pid);
         if (idx < 0 || idx >= MAX_NAVES)
             return;
 
-        if (mapa->naves[idx].estado == ESTADO_DESACTIVADO) {
+        if (mapa->naves[idx].estado == ESTADO_DESACTIVADO)
+        {
             /* Nave game over: se mantiene en el mapa como nave muerta */
             return;
         }
@@ -178,7 +192,9 @@ static void procesar_desregistrar(Mapa *mapa, const Config *cfg, const MsgRegist
         memset(&mapa->naves[idx], 0, sizeof(mapa->naves[idx]));
         if (mapa->num_naves > 0)
             mapa->num_naves--;
-    } else {
+    }
+    else
+    {
         int max_est = cfg->num_estaciones;
         if (max_est > MAX_ESTACIONES)
             max_est = MAX_ESTACIONES;
@@ -228,7 +244,8 @@ int registro_servidor_loop(Mapa *mapa, const Config *cfg)
 
     mq_unlink(MQ_REGISTRO_NAME);
     qreg = mq_open(MQ_REGISTRO_NAME, O_CREAT | O_RDONLY, 0660, &attr);
-    if (qreg == (mqd_t)-1) {
+    if (qreg == (mqd_t)-1)
+    {
         perror("mq_open registro");
         return -1;
     }
@@ -237,7 +254,8 @@ int registro_servidor_loop(Mapa *mapa, const Config *cfg)
 
     srand((unsigned int)time(NULL));
 
-    while (!g_stop) {
+    while (!g_stop)
+    {
         MsgRegistro req;
         struct timespec ts;
 
@@ -245,7 +263,8 @@ int registro_servidor_loop(Mapa *mapa, const Config *cfg)
             continue;
         ts.tv_sec += 1;
 
-        if (mq_timedreceive(qreg, (char *)&req, sizeof(req), NULL, &ts) == -1) {
+        if (mq_timedreceive(qreg, (char *)&req, sizeof(req), NULL, &ts) == -1)
+        {
             if (errno == ETIMEDOUT || errno == EINTR)
                 continue;
             perror("mq_receive registro");
@@ -255,18 +274,19 @@ int registro_servidor_loop(Mapa *mapa, const Config *cfg)
         if (pthread_mutex_lock(&mapa->mutex) != 0)
             continue;
 
-        switch (req.op) {
-            case REG_OP_REGISTRAR:
-                procesar_registrar(mapa, cfg, &req);
-                break;
-            case REG_OP_DESREGISTRAR:
-                procesar_desregistrar(mapa, cfg, &req);
-                break;
-            case REG_OP_DESACTIVAR:
-                procesar_desactivar(mapa, &req);
-                break;
-            default:
-                break;
+        switch (req.op)
+        {
+        case REG_OP_REGISTRAR:
+            procesar_registrar(mapa, cfg, &req);
+            break;
+        case REG_OP_DESREGISTRAR:
+            procesar_desregistrar(mapa, cfg, &req);
+            break;
+        case REG_OP_DESACTIVAR:
+            procesar_desactivar(mapa, &req);
+            break;
+        default:
+            break;
         }
 
         (void)pthread_mutex_unlock(&mapa->mutex);
