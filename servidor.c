@@ -5,6 +5,7 @@
 #include "ipc.h"
 #include "asteroides.h"
 #include "registro.h"
+#include "apagado.h"
 
 int main(int argc, char *argv[])
 {
@@ -32,6 +33,7 @@ int main(int argc, char *argv[])
     printf("servidor: esperando registros (Ctrl+C para salir)\n");
     (void)registro_servidor_loop(mapa, &cfg);
 
+    apagado_guardar_y_notificar(mapa, &cfg);
     shm_destruir(mapa);
     exit(EXIT_SUCCESS);
 }
