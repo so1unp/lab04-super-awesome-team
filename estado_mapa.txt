@@ -1,0 +1,16 @@
+# CosmiKernel - estado guardado: Wed Jun 17 14:52:09 2026
+juego_activo=1
+
+# Asteroides (8)
+asteroide fila=3 col=68 deuterio=79 mutexio=19 semaforita=62 kernelio=54 estado=0
+asteroide fila=4 col=31 deuterio=35 mutexio=12 semaforita=28 kernelio=72 estado=0
+asteroide fila=23 col=55 deuterio=78 mutexio=41 semaforita=25 kernelio=17 estado=0
+asteroide fila=23 col=15 deuterio=31 mutexio=50 semaforita=76 kernelio=77 estado=0
+asteroide fila=16 col=1 deuterio=52 mutexio=16 semaforita=44 kernelio=91 estado=0
+asteroide fila=23 col=8 deuterio=4 mutexio=48 semaforita=66 kernelio=32 estado=0
+asteroide fila=9 col=25 deuterio=23 mutexio=69 semaforita=53 kernelio=17 estado=0
+asteroide fila=16 col=77 deuterio=70 mutexio=85 semaforita=84 kernelio=61 estado=0
+
+# Naves (0)
+
+# Estaciones (0)
