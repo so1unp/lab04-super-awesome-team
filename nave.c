@@ -163,13 +163,20 @@ static int registrar_nave(void)
 {
     mqd_t mq_registro, mq_propia;
     char nombre_propia[MQ_NAVE_NAME_LEN];
-    MsgRegistro msg = { .tipo = CLIENTE_NAVE, .pid = getpid() };
+    MsgRegistro msg;
     MsgRegistroResp resp;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.op   = REG_OP_REGISTRAR;
+    msg.tipo = CLIENTE_NAVE;
+    msg.pid  = getpid();
+    msg.id   = -1;
+    snprintf(nombre_propia, sizeof(nombre_propia), MQ_NAVE_FMT, (int)getpid());
+    snprintf(msg.cola_respuesta, sizeof(msg.cola_respuesta), "%s", nombre_propia);
     struct mq_attr attr;
     int id = -1;
 
     /* Cola privada para recibir la respuesta del servidor. */
-    snprintf(nombre_propia, sizeof(nombre_propia), MQ_NAVE_FMT, (int)getpid());
     attr.mq_flags = 0; attr.mq_maxmsg = 4;
     attr.mq_msgsize = sizeof(MsgRegistroResp); attr.mq_curmsgs = 0;
     mq_propia = mq_open(nombre_propia, O_CREAT | O_RDONLY, 0666, &attr);
@@ -403,6 +410,15 @@ int main(int argc, char *argv[])
     {
         fprintf(stderr, "nave: registro fallido, usando id=0 (modo standalone)\n");
         id_nave = 0;
+    }
+    else
+    {
+        /* Inicializar campos de la nave en la SHM bajo el mutex. */
+        pthread_mutex_lock(&mapa->mutex);
+        mapa->naves[id_nave].combustible = NAVE_COMBUSTIBLE_INICIAL;
+        mapa->naves[id_nave].oxigeno     = NAVE_OXIGENO_INICIAL;
+        mapa->naves[id_nave].pid         = getpid();
+        pthread_mutex_unlock(&mapa->mutex);
     }
     snprintf(nombre_cola_propia, sizeof(nombre_cola_propia), MQ_NAVE_FMT, (int)getpid());
 
