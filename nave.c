@@ -44,18 +44,27 @@
 static volatile sig_atomic_t g_salir = 0;
 
 /* Argumentos pasados al hilo radar. */
-typedef struct {
+typedef struct
+{
     Mapa *mapa;
-    int   id_nave;
-    int   refresh_ms;
+    int id_nave;
+    int refresh_ms;
 } RadarArgs;
 
 /* Argumentos pasados al hilo de soporte vital. */
-typedef struct {
+typedef struct
+{
     Mapa *mapa;
-    int   id_nave;
-    int   intervalo_seg;
+    int id_nave;
+    int intervalo_seg;
 } VitalArgs;
+
+/* Argumentos pasados al hilo de propulsion. */
+typedef struct
+{
+    Mapa *mapa;
+    int id_nave;
+} PropulsionArgs;
 
 /* ─── Handler de SIGINT ───────────────────────────────────────────────── */
 
@@ -90,8 +99,17 @@ static Mapa *abrir_shm_mapa(int *creada_por_mi)
          * y la inicializo con datos demo para poder probar la nave. */
         fprintf(stderr, "nave: servidor no detectado, modo standalone (SHM demo)\n");
         fd = shm_open(SHM_MAPA_NAME, O_RDWR | O_CREAT, 0666);
-        if (fd == -1) { perror("shm_open(create)"); return NULL; }
-        if (ftruncate(fd, sizeof(Mapa)) == -1) { perror("ftruncate"); close(fd); return NULL; }
+        if (fd == -1)
+        {
+            perror("shm_open(create)");
+            return NULL;
+        }
+        if (ftruncate(fd, sizeof(Mapa)) == -1)
+        {
+            perror("ftruncate");
+            close(fd);
+            return NULL;
+        }
         *creada_por_mi = 1;
     }
     else if (fd == -1)
@@ -102,7 +120,11 @@ static Mapa *abrir_shm_mapa(int *creada_por_mi)
 
     mapa = mmap(NULL, sizeof(Mapa), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    if (mapa == MAP_FAILED) { perror("mmap"); return NULL; }
+    if (mapa == MAP_FAILED)
+    {
+        perror("mmap");
+        return NULL;
+    }
 
     if (*creada_por_mi)
     {
@@ -117,33 +139,47 @@ static Mapa *abrir_shm_mapa(int *creada_por_mi)
 
         for (int f = 0; f < MAPA_FILAS; f++)
             for (int c = 0; c < MAPA_COLS; c++)
-                { mapa->celdas[f][c].tipo = CELDA_VACIA; mapa->celdas[f][c].idx = -1; }
+            {
+                mapa->celdas[f][c].tipo = CELDA_VACIA;
+                mapa->celdas[f][c].idx = -1;
+            }
 
         /* Nave demo en (5,10) */
-        mapa->naves[0].fila = 5;  mapa->naves[0].col = 10;
+        mapa->naves[0].fila = 5;
+        mapa->naves[0].col = 10;
         mapa->naves[0].combustible = NAVE_COMBUSTIBLE_INICIAL;
-        mapa->naves[0].oxigeno     = NAVE_OXIGENO_INICIAL;
-        mapa->naves[0].deuterio = 0; mapa->naves[0].mutexio = 0;
-        mapa->naves[0].semaforita = 0; mapa->naves[0].kernelio = 0;
+        mapa->naves[0].oxigeno = NAVE_OXIGENO_INICIAL;
+        mapa->naves[0].deuterio = 0;
+        mapa->naves[0].mutexio = 0;
+        mapa->naves[0].semaforita = 0;
+        mapa->naves[0].kernelio = 0;
         mapa->naves[0].estado = ESTADO_ACTIVO;
-        mapa->naves[0].pid = getpid(); mapa->naves[0].id = 0;
-        mapa->celdas[5][10].tipo = CELDA_NAVE; mapa->celdas[5][10].idx = 0;
+        mapa->naves[0].pid = getpid();
+        mapa->naves[0].id = 0;
+        mapa->celdas[5][10].tipo = CELDA_NAVE;
+        mapa->celdas[5][10].idx = 0;
         mapa->num_naves = 1;
 
         /* Estacion demo en (2,40) */
-        mapa->estaciones[0].fila = 2; mapa->estaciones[0].col = 40;
+        mapa->estaciones[0].fila = 2;
+        mapa->estaciones[0].col = 40;
         mapa->estaciones[0].combustible = ESTACION_COMBUSTIBLE_INICIAL;
         mapa->estaciones[0].estado = ESTADO_ACTIVO;
         mapa->estaciones[0].id = 0;
-        mapa->celdas[2][40].tipo = CELDA_ESTACION; mapa->celdas[2][40].idx = 0;
+        mapa->celdas[2][40].tipo = CELDA_ESTACION;
+        mapa->celdas[2][40].idx = 0;
         mapa->num_estaciones = 1;
 
         /* Asteroide demo en (15,30) */
-        mapa->asteroides[0].fila = 15; mapa->asteroides[0].col = 30;
-        mapa->asteroides[0].deuterio = 50; mapa->asteroides[0].mutexio = 30;
-        mapa->asteroides[0].semaforita = 20; mapa->asteroides[0].kernelio = 10;
+        mapa->asteroides[0].fila = 15;
+        mapa->asteroides[0].col = 30;
+        mapa->asteroides[0].deuterio = 50;
+        mapa->asteroides[0].mutexio = 30;
+        mapa->asteroides[0].semaforita = 20;
+        mapa->asteroides[0].kernelio = 10;
         mapa->asteroides[0].estado = ESTADO_ACTIVO;
-        mapa->celdas[15][30].tipo = CELDA_ASTEROIDE; mapa->celdas[15][30].idx = 0;
+        mapa->celdas[15][30].tipo = CELDA_ASTEROIDE;
+        mapa->celdas[15][30].idx = 0;
         mapa->num_asteroides = 1;
 
         mapa->juego_activo = 1;
@@ -163,17 +199,23 @@ static int registrar_nave(void)
 {
     mqd_t mq_registro, mq_propia;
     char nombre_propia[MQ_NAVE_NAME_LEN];
-    MsgRegistro msg = { .tipo = CLIENTE_NAVE, .pid = getpid() };
+    MsgRegistro msg = {.tipo = CLIENTE_NAVE, .pid = getpid()};
     MsgRegistroResp resp;
     struct mq_attr attr;
     int id = -1;
 
     /* Cola privada para recibir la respuesta del servidor. */
     snprintf(nombre_propia, sizeof(nombre_propia), MQ_NAVE_FMT, (int)getpid());
-    attr.mq_flags = 0; attr.mq_maxmsg = 4;
-    attr.mq_msgsize = sizeof(MsgRegistroResp); attr.mq_curmsgs = 0;
+    attr.mq_flags = 0;
+    attr.mq_maxmsg = 4;
+    attr.mq_msgsize = sizeof(MsgRegistroResp);
+    attr.mq_curmsgs = 0;
     mq_propia = mq_open(nombre_propia, O_CREAT | O_RDONLY, 0666, &attr);
-    if (mq_propia == (mqd_t)-1) { perror("mq_open(propia)"); return -1; }
+    if (mq_propia == (mqd_t)-1)
+    {
+        perror("mq_open(propia)");
+        return -1;
+    }
 
     /* Cola publica del servidor. */
     mq_registro = mq_open(MQ_REGISTRO_NAME, O_WRONLY);
@@ -188,7 +230,9 @@ static int registrar_nave(void)
     if (mq_send(mq_registro, (const char *)&msg, sizeof(msg), 0) == -1)
     {
         perror("mq_send(registro)");
-        mq_close(mq_registro); mq_close(mq_propia); mq_unlink(nombre_propia);
+        mq_close(mq_registro);
+        mq_close(mq_propia);
+        mq_unlink(nombre_propia);
         return -1;
     }
     mq_close(mq_registro);
@@ -241,7 +285,8 @@ static void *hilo_soporte_vital(void *arg)
             sleep(1);
             segundos_restantes--;
         }
-        if (g_salir) break;
+        if (g_salir)
+            break;
 
         pthread_mutex_lock(&mapa->mutex);
         if (mapa->naves[id].oxigeno > 0)
@@ -262,14 +307,14 @@ static void *hilo_soporte_vital(void *arg)
  *
  * Diseno de la ventana:
  *   ┌──────── Mapa (24x80) ─────────┐ ┌─ Estado nave ──┐
- *   │                                │ │ Combustible    │
- *   │   .......*..........E......    │ │ Oxigeno        │
+ *   │                               │ │ Combustible    │
+ *   │   .......*..........E......   │ │ Oxigeno        │
  *   │   .....@..........            │ │ Inventario     │
- *   │                                │ │  Deuterio  ... │
- *   │                                │ │  Mutexio   ... │
- *   │                                │ │  Semaforita... │
- *   │                                │ │  Kernelio  ... │
- *   └────────────────────────────────┘ └────────────────┘
+ *   │                               │ │  Deuterio  ... │
+ *   │                               │ │  Mutexio   ... │
+ *   │                               │ │  Semaforita... │
+ *   │                               │ │  Kernelio  ... │
+ *   └───────────────────────────────┘ └────────────────┘
  *
  * Toma el mutex de proceso compartido del mapa solo para copiar los datos
  * (asi no bloqueamos al servidor mientras dibujamos en pantalla).
@@ -281,12 +326,12 @@ static void *hilo_radar(void *arg)
     int id = args->id_nave;
 
     /* Ventanas ncurses: la del mapa a la izquierda, la de estado a la derecha. */
-    int alto_mapa  = MAPA_FILAS + 2;       /* +2 para el borde */
-    int ancho_mapa = MAPA_COLS  + 2;
+    int alto_mapa = MAPA_FILAS + 2; /* +2 para el borde */
+    int ancho_mapa = MAPA_COLS + 2;
     int alto_panel = MAPA_FILAS + 2;
     int ancho_panel = 28;
 
-    WINDOW *win_mapa  = newwin(alto_mapa,  ancho_mapa,  0, 0);
+    WINDOW *win_mapa = newwin(alto_mapa, ancho_mapa, 0, 0);
     WINDOW *win_panel = newwin(alto_panel, ancho_panel, 0, ancho_mapa + 1);
     if (win_mapa == NULL || win_panel == NULL)
         return NULL;
@@ -296,7 +341,7 @@ static void *hilo_radar(void *arg)
 
     /* Copia local del mapa para dibujar fuera de la seccion critica. */
     Celda celdas_local[MAPA_FILAS][MAPA_COLS];
-    Nave  nave_local;
+    Nave nave_local;
 
     while (!g_salir)
     {
@@ -334,16 +379,16 @@ static void *hilo_radar(void *arg)
         box(win_panel, 0, 0);
         mvwprintw(win_panel, 0, 2, " Nave #%d ", id);
 
-        mvwprintw(win_panel, 1, 1,  "PID:         %d", nave_local.pid);
-        mvwprintw(win_panel, 2, 1,  "Posicion:    (%d,%d)", nave_local.fila, nave_local.col);
-        mvwprintw(win_panel, 3, 1,  "Estado:      %s",
+        mvwprintw(win_panel, 1, 1, "PID:         %d", nave_local.pid);
+        mvwprintw(win_panel, 2, 1, "Posicion:    (%d,%d)", nave_local.fila, nave_local.col);
+        mvwprintw(win_panel, 3, 1, "Estado:      %s",
                   nave_local.estado == ESTADO_ACTIVO ? "ACTIVA" : "DESACTIVADA");
 
-        mvwprintw(win_panel, 5, 1,  "Combustible: %d", nave_local.combustible);
-        mvwprintw(win_panel, 6, 1,  "Oxigeno:     %d", nave_local.oxigeno);
+        mvwprintw(win_panel, 5, 1, "Combustible: %d", nave_local.combustible);
+        mvwprintw(win_panel, 6, 1, "Oxigeno:     %d", nave_local.oxigeno);
 
-        mvwprintw(win_panel, 8, 1,  "-- Inventario --");
-        mvwprintw(win_panel, 9, 1,  " Deuterio:   %d", nave_local.deuterio);
+        mvwprintw(win_panel, 8, 1, "-- Inventario --");
+        mvwprintw(win_panel, 9, 1, " Deuterio:   %d", nave_local.deuterio);
         mvwprintw(win_panel, 10, 1, " Mutexio:    %d", nave_local.mutexio);
         mvwprintw(win_panel, 11, 1, " Semaforita: %d", nave_local.semaforita);
         mvwprintw(win_panel, 12, 1, " Kernelio:   %d", nave_local.kernelio);
@@ -356,13 +401,82 @@ static void *hilo_radar(void *arg)
 
         /* 4) Dormir refresh_ms ms. */
         struct timespec ts;
-        ts.tv_sec  = args->refresh_ms / 1000;
+        ts.tv_sec = args->refresh_ms / 1000;
         ts.tv_nsec = (args->refresh_ms % 1000) * 1000000L;
         nanosleep(&ts, NULL);
     }
 
     delwin(win_mapa);
     delwin(win_panel);
+    return NULL;
+}
+
+static void *hilo_propulsion(void *arg)
+{
+    PropulsionArgs *args = (PropulsionArgs *)arg;
+    Mapa *mapa = args->mapa;
+    int id = args->id_nave;
+    int ch;
+
+    while (!g_salir)
+    {
+        ch = getch();
+
+        int df = 0, dc = 0;
+        switch (ch)
+        {
+        case 'w':
+        case 'k':
+        case KEY_UP:
+            df = -1;
+            break;
+        case 's':
+        case 'j':
+        case KEY_DOWN:
+            df = 1;
+            break;
+        case 'a':
+        case 'h':
+        case KEY_LEFT:
+            dc = -1;
+            break;
+        case 'd':
+        case 'l':
+        case KEY_RIGHT:
+            dc = 1;
+            break;
+        default:
+            break;
+        }
+
+        if (df != 0 || dc != 0)
+        {
+            int nueva_fila = mapa->naves[id].fila + df;
+            int nueva_col = mapa->naves[id].col + dc;
+            //////Bloque provisional//////
+            mapa->naves[0].fila = nueva_fila;
+            mapa->naves[0].col = nueva_col;
+            mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
+            mapa->celdas[nueva_fila][nueva_col].idx = id;
+            mapa->celdas[nueva_fila - df][nueva_col - dc].tipo = CELDA_VACIA;
+            mapa->celdas[nueva_fila - df][nueva_col - dc].idx = -1;
+            
+            // mover_nave(mapa, id, nueva_fila, nueva_col);
+            pthread_mutex_lock(&mapa->mutex);
+            if (mapa->naves[id].combustible > 0)
+            {
+                mapa->naves[id].combustible--;
+                if (mapa->naves[id].combustible == 0)
+                    mapa->naves[id].estado = ESTADO_DESACTIVADO;
+            }
+            pthread_mutex_unlock(&mapa->mutex);
+            ////////Debe ser remplazado por una funcion mover nave que contemple los semaforos/////////////
+        }
+
+        /* Poll cada 16ms (~60 Hz) para no quemar CPU. */
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 16000000L};
+        nanosleep(&ts, NULL);
+    }
     return NULL;
 }
 
@@ -375,9 +489,10 @@ int main(int argc, char *argv[])
     Mapa *mapa = NULL;
     int creada_por_mi = 0;
     int id_nave;
-    pthread_t th_radar, th_vital;
+    pthread_t th_radar, th_vital, th_propulsion;
     RadarArgs radar_args;
     VitalArgs vital_args;
+    PropulsionArgs propulsion_args;
     struct sigaction sa;
     char nombre_cola_propia[MQ_NAVE_NAME_LEN];
 
@@ -389,13 +504,17 @@ int main(int argc, char *argv[])
     memset(&sa, 0, sizeof(sa));
     sa.sa_handler = manejar_sigint;
     sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;  /* sin SA_RESTART: queremos cortar nanosleep/sleep */
-    sigaction(SIGINT,  &sa, NULL);
+    sa.sa_flags = 0; /* sin SA_RESTART: queremos cortar nanosleep/sleep */
+    sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
     /* 3) SHM del mapa (con fallback a modo standalone). */
     mapa = abrir_shm_mapa(&creada_por_mi);
-    if (mapa == NULL) { fprintf(stderr, "nave: no se pudo abrir SHM\n"); return EXIT_FAILURE; }
+    if (mapa == NULL)
+    {
+        fprintf(stderr, "nave: no se pudo abrir SHM\n");
+        return EXIT_FAILURE;
+    }
 
     /* 4) Registro con el servidor (con fallback a id=0). */
     id_nave = registrar_nave();
@@ -410,8 +529,9 @@ int main(int argc, char *argv[])
     initscr();
     cbreak();
     noecho();
-    curs_set(0);              /* ocultar cursor */
+    curs_set(0); /* ocultar cursor */
     keypad(stdscr, TRUE);
+    nodelay(stdscr, TRUE);
     refresh();
 
     /* Aviso si la terminal es chica para el layout. */
@@ -423,7 +543,8 @@ int main(int argc, char *argv[])
         fprintf(stderr, "nave: terminal demasiado chica (necesita %dx%d, actual %dx%d)\n",
                 MAPA_FILAS + 2, MAPA_COLS + 2 + 28 + 1, filas, cols);
         munmap(mapa, sizeof(Mapa));
-        if (creada_por_mi) shm_unlink(SHM_MAPA_NAME);
+        if (creada_por_mi)
+            shm_unlink(SHM_MAPA_NAME);
         mq_unlink(nombre_cola_propia);
         return EXIT_FAILURE;
     }
@@ -437,7 +558,8 @@ int main(int argc, char *argv[])
         endwin();
         perror("pthread_create(radar)");
         munmap(mapa, sizeof(Mapa));
-        if (creada_por_mi) shm_unlink(SHM_MAPA_NAME);
+        if (creada_por_mi)
+            shm_unlink(SHM_MAPA_NAME);
         mq_unlink(nombre_cola_propia);
         return EXIT_FAILURE;
     }
@@ -452,21 +574,36 @@ int main(int argc, char *argv[])
         endwin();
         perror("pthread_create(soporte_vital)");
         munmap(mapa, sizeof(Mapa));
-        if (creada_por_mi) shm_unlink(SHM_MAPA_NAME);
+        if (creada_por_mi)
+            shm_unlink(SHM_MAPA_NAME);
         mq_unlink(nombre_cola_propia);
+        return EXIT_FAILURE;
+    }
+
+    propulsion_args.mapa = mapa;
+    propulsion_args.id_nave = id_nave;
+    if (pthread_create(&th_propulsion, NULL, hilo_propulsion, &propulsion_args) != 0)
+    {
+        g_salir = 1;
+        pthread_join(th_radar, NULL);
+        pthread_join(th_vital, NULL);
+        endwin();
+        perror("pthread_create(propulsion)");
         return EXIT_FAILURE;
     }
 
     /* 7) Esperar a que ambos hilos terminen (cuando g_salir = 1). */
     pthread_join(th_radar, NULL);
     pthread_join(th_vital, NULL);
+    pthread_join(th_propulsion, NULL);
 
     /* 8) Cleanup ncurses. */
     endwin();
 
     /* 9) Cleanup IPC. */
     munmap(mapa, sizeof(Mapa));
-    if (creada_por_mi) shm_unlink(SHM_MAPA_NAME);
+    if (creada_por_mi)
+        shm_unlink(SHM_MAPA_NAME);
     mq_unlink(nombre_cola_propia);
 
     printf("nave: saliendo limpiamente\n");

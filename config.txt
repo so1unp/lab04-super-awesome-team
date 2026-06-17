@@ -22,7 +22,7 @@ precio_oxigeno     = 8
 umbral_combustible_estacion = 30
 
 # Segundos entre cada decremento de oxigeno en la nave
-intervalo_oxigeno_nave = 5
+intervalo_oxigeno_nave = 1
 
 # Segundos entre cada decremento de combustible en la estacion
 intervalo_combustible_estacion = 10
