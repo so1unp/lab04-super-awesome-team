@@ -5,6 +5,8 @@
 #include "ipc.h"
 #include "asteroides.h"
 #include "semaforos.h"
+#include "registro.h"
+#include "apagado.h"
 
 int main(int argc, char *argv[])
 {
@@ -38,9 +40,15 @@ int main(int argc, char *argv[])
     }
     printf("servidor: %d semaforos de celda creados\n", MAPA_FILAS * MAPA_COLS);
 
-    // Agregar código aquí.
 
+
+    printf("servidor: esperando registros (Ctrl+C para salir)\n");
+    (void)registro_servidor_loop(mapa, &cfg);
+
+    apagado_guardar_y_notificar(mapa, &cfg);
+  
     semaforos_destruir();
+  
     shm_destruir(mapa);
     exit(EXIT_SUCCESS);
 }
