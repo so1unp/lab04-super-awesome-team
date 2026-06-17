@@ -15,7 +15,7 @@ PROG=nave estacion servidor
 LIST=$(addprefix $(BIN)/, $(PROG))
 
 # Objetos compartidos compilados desde src/
-SHARED_OBJS=$(SRC)/config.o $(SRC)/shm.o $(SRC)/asteroides.o
+SHARED_OBJS=$(SRC)/config.o $(SRC)/shm.o $(SRC)/asteroides.o $(SRC)/registro.o
 
 .PHONY: all
 all: $(LIST)

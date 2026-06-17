@@ -34,15 +34,28 @@
 
 /* Cola de registro: las naves y estaciones se registran al servidor aqui */
 #define MQ_REGISTRO_NAME "/cosmikernel_registro"
+#define MQ_REGISTRO_MAXMSG 8
+
+/* Cola de respuesta de registro creada por cada cliente */
+#define MQ_REG_RESP_LEN 64
+
+/* ─── Operaciones sobre el registro de clientes ───────────────────────── */
+typedef enum
+{
+    REG_OP_REGISTRAR = 1,
+    REG_OP_DESREGISTRAR = 2,
+    REG_OP_DESACTIVAR = 3
+} TipoRegistroOp;
 
 /* ─── Tipos de operacion en transacciones nave ↔ estacion ─────────────── */
-typedef enum {
-    OP_VENDER_DEUTERIO     = 0,
-    OP_VENDER_MUTEXIO      = 1,
-    OP_VENDER_SEMAFORITA   = 2,
-    OP_VENDER_KERNELIO     = 3,
+typedef enum
+{
+    OP_VENDER_DEUTERIO = 0,
+    OP_VENDER_MUTEXIO = 1,
+    OP_VENDER_SEMAFORITA = 2,
+    OP_VENDER_KERNELIO = 3,
     OP_COMPRAR_COMBUSTIBLE = 4,
-    OP_COMPRAR_OXIGENO     = 5
+    OP_COMPRAR_OXIGENO = 5
 } TipoOperacion;
 
 /* ─── Mensajes IPC ─────────────────────────────────────────────────────── */
@@ -53,8 +66,11 @@ typedef enum {
  */
 typedef struct
 {
-    TipoCliente tipo; /* CLIENTE_NAVE o CLIENTE_ESTACION */
+    TipoRegistroOp op; /* alta / baja / desactivar */
+    TipoCliente tipo;  /* CLIENTE_NAVE o CLIENTE_ESTACION */
     pid_t pid;
+    int id; /* usado en baja/desactivar, -1 si se desconoce */
+    char cola_respuesta[MQ_REG_RESP_LEN];
 } MsgRegistro;
 
 /*
@@ -68,6 +84,7 @@ typedef struct
     int fila;
     int col;
     int error; /* 0 = ok, != 0 = rechazo */
+    char shm_name[MQ_REG_RESP_LEN];
 } MsgRegistroResp;
 
 /*
