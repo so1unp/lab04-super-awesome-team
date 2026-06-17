@@ -4,6 +4,7 @@
 #include "shm.h"
 #include "ipc.h"
 #include "asteroides.h"
+#include "registro.h"
 
 int main(int argc, char *argv[])
 {
@@ -28,7 +29,8 @@ int main(int argc, char *argv[])
     asteroides_inicializar(mapa, &cfg);
     printf("servidor: %d asteroides colocados en el mapa\n", mapa->num_asteroides);
 
-    // Agregar código aquí.
+    printf("servidor: esperando registros (Ctrl+C para salir)\n");
+    (void)registro_servidor_loop(mapa, &cfg);
 
     shm_destruir(mapa);
     exit(EXIT_SUCCESS);
