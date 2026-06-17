@@ -44,7 +44,8 @@ typedef enum
 {
     REG_OP_REGISTRAR = 1,
     REG_OP_DESREGISTRAR = 2,
-    REG_OP_DESACTIVAR = 3
+    REG_OP_DESACTIVAR = 3,          /* nave queda game over */
+    REG_OP_DESACTIVAR_ESTACION = 4  /* estacion sin combustible */
 } TipoRegistroOp;
 
 /* ─── Tipos de operacion en transacciones nave ↔ estacion ─────────────── */
