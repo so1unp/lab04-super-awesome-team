@@ -4,6 +4,7 @@
 #include "shm.h"
 #include "ipc.h"
 #include "asteroides.h"
+#include "semaforos.h"
 
 int main(int argc, char *argv[])
 {
@@ -28,8 +29,18 @@ int main(int argc, char *argv[])
     asteroides_inicializar(mapa, &cfg);
     printf("servidor: %d asteroides colocados en el mapa\n", mapa->num_asteroides);
 
+    /* Task #29: semaforos binarios por celda del mapa. */
+    if (semaforos_crear() == -1)
+    {
+        fprintf(stderr, "servidor: error creando semaforos de celda\n");
+        shm_destruir(mapa);
+        exit(EXIT_FAILURE);
+    }
+    printf("servidor: %d semaforos de celda creados\n", MAPA_FILAS * MAPA_COLS);
+
     // Agregar código aquí.
 
+    semaforos_destruir();
     shm_destruir(mapa);
     exit(EXIT_SUCCESS);
 }
