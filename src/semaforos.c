@@ -11,6 +11,7 @@
 #include "ipc.h"
 #include "semaforos.h" 
 
+// Definir nombre
 void semaforo_celda_nombre(char *out, size_t len, int fila, int col)
 {
     snprintf(out, len, SEM_CELDA_FMT, fila, col);
