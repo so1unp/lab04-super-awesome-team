@@ -9,7 +9,7 @@
 #include <sys/stat.h>
 #include "config.h"
 #include "ipc.h"
-#include "semaforos.h"
+#include "semaforos.h" 
 
 void semaforo_celda_nombre(char *out, size_t len, int fila, int col)
 {
