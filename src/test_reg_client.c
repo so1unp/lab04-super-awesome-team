@@ -27,13 +27,15 @@ int main(void)
 
     mq_unlink(cola_resp);
     qresp = mq_open(cola_resp, O_CREAT | O_RDONLY, 0660, &attr);
-    if (qresp == (mqd_t)-1) {
+    if (qresp == (mqd_t)-1)
+    {
         perror("mq_open resp");
         return 1;
     }
 
     qreg = mq_open(MQ_REGISTRO_NAME, O_WRONLY);
-    if (qreg == (mqd_t)-1) {
+    if (qreg == (mqd_t)-1)
+    {
         perror("mq_open registro");
         mq_close(qresp);
         mq_unlink(cola_resp);
@@ -47,7 +49,8 @@ int main(void)
     req.id = -1;
     snprintf(req.cola_respuesta, sizeof(req.cola_respuesta), "%s", cola_resp);
 
-    if (mq_send(qreg, (const char *)&req, sizeof(req), 0) == -1) {
+    if (mq_send(qreg, (const char *)&req, sizeof(req), 0) == -1)
+    {
         perror("mq_send registrar");
         mq_close(qreg);
         mq_close(qresp);
@@ -55,7 +58,8 @@ int main(void)
         return 1;
     }
 
-    if (mq_receive(qresp, (char *)&resp, sizeof(resp), NULL) == -1) {
+    if (mq_receive(qresp, (char *)&resp, sizeof(resp), NULL) == -1)
+    {
         perror("mq_receive resp");
         mq_close(qreg);
         mq_close(qresp);
@@ -63,7 +67,8 @@ int main(void)
         return 1;
     }
 
-    if (resp.error != 0) {
+    if (resp.error != 0)
+    {
         fprintf(stderr, "registro rechazado\n");
         mq_close(qreg);
         mq_close(qresp);
@@ -72,7 +77,8 @@ int main(void)
     }
 
     int fd = shm_open(resp.shm_name, O_RDONLY, 0);
-    if (fd == -1) {
+    if (fd == -1)
+    {
         perror("shm_open");
         mq_close(qreg);
         mq_close(qresp);
@@ -82,7 +88,8 @@ int main(void)
 
     Mapa *mapa = mmap(NULL, sizeof(Mapa), PROT_READ, MAP_SHARED, fd, 0);
     close(fd);
-    if (mapa == MAP_FAILED) {
+    if (mapa == MAP_FAILED)
+    {
         perror("mmap");
         mq_close(qreg);
         mq_close(qresp);
