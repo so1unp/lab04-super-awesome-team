@@ -56,6 +56,27 @@ typedef struct {
     int   intervalo_seg;
 } VitalArgs;
 
+/*
+ * Estado de la ultima alerta de combustible recibida (task #30).
+ * Lo escribe el hilo de alertas y lo lee el hilo radar para mostrarlo.
+ * Como es estado LOCAL del proceso (no de la SHM), usa su propio mutex.
+ */
+typedef struct {
+    pthread_mutex_t mutex;
+    int hay_alerta;     /* 0 hasta recibir la primera */
+    int id_estacion;    /* -1 si la estacion no esta registrada */
+    int pid_estacion;
+    int combustible;    /* combustible reportado por la estacion */
+    int total;          /* cantidad total de alertas recibidas */
+} EstadoAlerta;
+
+static EstadoAlerta g_alerta;  /* inicializado en main (mutex) y a cero por ser static */
+
+/* Argumentos del hilo de alertas: nombre de la cola privada de la nave. */
+typedef struct {
+    char cola[MQ_NAVE_NAME_LEN];
+} AlertaArgs;
+
 /* ─── Handler de SIGINT ───────────────────────────────────────────────── */
 
 static void manejar_sigint(int sig)
@@ -209,6 +230,67 @@ static void *hilo_soporte_vital(void *arg)
     return NULL;
 }
 
+/* ─── Hilo de alertas de combustible (task #30) ───────────────────────── */
+
+/*
+ * Escucha la cola privada de la nave (/cosmikernel_nave_<pid>, ya creada en
+ * registrar_nave) esperando mensajes MsgAlertaCombustible que envian las
+ * estaciones cuando se quedan sin combustible y piden deuterio.
+ *
+ * La cola POSIX bufferiza los mensajes, asi que mientras este hilo lea no se
+ * pierde ninguno (criterio de aceptacion). La ultima alerta y el total se
+ * guardan en g_alerta para que el hilo radar los muestre en el panel.
+ *
+ * Nota: la cola se creo con mq_msgsize = sizeof(MsgRegistroResp) (la respuesta
+ * del registro). Como MsgAlertaCombustible es mas chico, entra sin problema;
+ * leemos con un buffer del tamano real de la cola (mq_getattr) para no fallar
+ * con EMSGSIZE.
+ */
+static void *hilo_alertas(void *arg)
+{
+    AlertaArgs *args = (AlertaArgs *)arg;
+    mqd_t mq;
+    struct mq_attr attr;
+    char *buf;
+
+    mq = mq_open(args->cola, O_RDONLY);
+    if (mq == (mqd_t)-1)
+        return NULL;  /* sin cola no hay alertas; no es fatal para la nave */
+
+    if (mq_getattr(mq, &attr) == -1) { mq_close(mq); return NULL; }
+    buf = malloc((size_t)attr.mq_msgsize);
+    if (buf == NULL) { mq_close(mq); return NULL; }
+
+    while (!g_salir)
+    {
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1;  /* timeout 1s para poder revisar g_salir */
+
+        ssize_t n = mq_timedreceive(mq, buf, (size_t)attr.mq_msgsize, NULL, &ts);
+        if (n < 0)
+            continue;  /* ETIMEDOUT / EINTR: reintentar */
+
+        if ((size_t)n >= sizeof(MsgAlertaCombustible))
+        {
+            MsgAlertaCombustible al;
+            memcpy(&al, buf, sizeof(al));
+
+            pthread_mutex_lock(&g_alerta.mutex);
+            g_alerta.hay_alerta   = 1;
+            g_alerta.id_estacion  = al.id_estacion;
+            g_alerta.pid_estacion = al.pid_estacion;
+            g_alerta.combustible  = al.combustible_actual;
+            g_alerta.total++;
+            pthread_mutex_unlock(&g_alerta.mutex);
+        }
+    }
+
+    free(buf);
+    mq_close(mq);
+    return NULL;
+}
+
 /* ─── Hilo radar (task #27) ───────────────────────────────────────────── */
 
 /*
@@ -302,6 +384,32 @@ static void *hilo_radar(void *arg)
         mvwprintw(win_panel, 11, 1, " Semaforita: %d", nave_local.semaforita);
         mvwprintw(win_panel, 12, 1, " Kernelio:   %d", nave_local.kernelio);
 
+        /* 3b) Alertas de combustible recibidas de las estaciones (task #30). */
+        pthread_mutex_lock(&g_alerta.mutex);
+        int al_hay  = g_alerta.hay_alerta;
+        int al_id   = g_alerta.id_estacion;
+        int al_pid  = g_alerta.pid_estacion;
+        int al_comb = g_alerta.combustible;
+        int al_tot  = g_alerta.total;
+        pthread_mutex_unlock(&g_alerta.mutex);
+
+        mvwprintw(win_panel, 14, 1, "-- Alertas SOS --");
+        if (al_hay)
+        {
+            wattron(win_panel, A_BOLD);
+            if (al_id >= 0)
+                mvwprintw(win_panel, 15, 1, "Estacion #%d pide", al_id);
+            else
+                mvwprintw(win_panel, 15, 1, "Estacion(pid %d)", al_pid);
+            mvwprintw(win_panel, 16, 1, "DEUTERIO! comb=%d", al_comb);
+            wattroff(win_panel, A_BOLD);
+            mvwprintw(win_panel, 17, 1, "recibidas: %d", al_tot);
+        }
+        else
+        {
+            mvwprintw(win_panel, 15, 1, "(sin alertas)");
+        }
+
         mvwprintw(win_panel, alto_panel - 2, 1, "Ctrl+C: salir");
 
         wnoutrefresh(win_mapa);
@@ -328,9 +436,10 @@ int main(int argc, char *argv[])
     Config cfg;
     Mapa *mapa = NULL;
     int id_nave;
-    pthread_t th_radar, th_vital;
+    pthread_t th_radar, th_vital, th_alertas;
     RadarArgs radar_args;
     VitalArgs vital_args;
+    AlertaArgs alerta_args;
     struct sigaction sa;
     char nombre_cola_propia[MQ_NAVE_NAME_LEN];
 
@@ -367,6 +476,11 @@ int main(int argc, char *argv[])
     pthread_mutex_unlock(&mapa->mutex);
 
     snprintf(nombre_cola_propia, sizeof(nombre_cola_propia), MQ_NAVE_FMT, (int)getpid());
+
+    /* Estado de alertas (task #30): mutex local + nombre de cola para el hilo. */
+    pthread_mutex_init(&g_alerta.mutex, NULL);
+    g_alerta.id_estacion = -1;
+    snprintf(alerta_args.cola, sizeof(alerta_args.cola), "%s", nombre_cola_propia);
 
     /* 5) Inicializar ncurses. */
     initscr();
@@ -416,9 +530,23 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
-    /* 7) Esperar a que ambos hilos terminen (cuando g_salir = 1). */
+    /* Hilo de alertas de combustible (task #30). */
+    if (pthread_create(&th_alertas, NULL, hilo_alertas, &alerta_args) != 0)
+    {
+        g_salir = 1;
+        pthread_join(th_radar, NULL);
+        pthread_join(th_vital, NULL);
+        endwin();
+        perror("pthread_create(alertas)");
+        munmap(mapa, sizeof(Mapa));
+        mq_unlink(nombre_cola_propia);
+        return EXIT_FAILURE;
+    }
+
+    /* 7) Esperar a que los hilos terminen (cuando g_salir = 1). */
     pthread_join(th_radar, NULL);
     pthread_join(th_vital, NULL);
+    pthread_join(th_alertas, NULL);
 
     /* 8) Cleanup ncurses. */
     endwin();

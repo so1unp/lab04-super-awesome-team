@@ -7,11 +7,19 @@
 #include <sys/stat.h>
 #include <semaphore.h>
 #include <string.h>
+#include <sys/mman.h>
 #include "include/estacion.h"
 #include "include/config.h"
+#include "include/ipc.h"
+#include "include/mapa.h"
 
 Estacion mi_estacion;
 int combustible = ESTACION_COMBUSTIBLE_INICIAL;
+
+/* SHM del mapa: la estacion la lee para conocer los PIDs de las naves
+ * registradas y poder enviarles la alerta de combustible (task #30). */
+Mapa *mapa_shm = NULL;
+int  mi_id_estacion = -1;  /* slot en Mapa.estaciones[] si la estacion se registro */
 
 //declaramos el mutex global
 pthread_mutex_t lock;
@@ -50,31 +58,48 @@ void* gasto_combustible(void* arg){
         //evaluamos si pasamos el umbral de alerta
         if(combustible <= DEFAULT_UMBRAL_COMBUSTIBLE ){
             printf("¡ME ESTOY QUEDANDO SIN COMBUSTIBLE!!!!!\n");
-            
-            mqd_t cola;
-            char buff[256];
-            int prio = 0;
 
-            sprintf(buff, "SOS_DEUTERIO");
+            /*
+             * Aviso de deuterio a las naves del cuadrante (task #26 -> #30).
+             * Usamos el protocolo de ipc.h: leemos los PIDs de las naves
+             * registradas desde la SHM y enviamos un MsgAlertaCombustible a
+             * la cola privada de cada nave (/cosmikernel_nave_<pid>).
+             */
+            if (mapa_shm != NULL) {
+                int pids[MAX_NAVES];
+                int n = 0;
 
-            int cant_naves = 3;
-            int ids_naves[] = {1, 2, 3};
-
-            for(int i=0 ; i<cant_naves ; i++){
-                char nombre_cola_nave[50];
-                sprintf(nombre_cola_nave, "/cola_nave_%d", ids_naves[i]);
-
-                mqd_t cola_nave = mq_open(nombre_cola_nave, O_WRONLY);
-                
-                if (cola_nave != (mqd_t)-1) {
-                    if (mq_send(cola_nave, buff, strlen(buff) + 1, prio) == -1) {
-                        perror("Error al enviar S.O.S a una nave");
-                    } else {
-                        printf("-> S.O.S enviado a la nave %d por %s\n", ids_naves[i], nombre_cola_nave);
+                /* Copiamos los PIDs de naves activas bajo el mutex del mapa
+                 * (seccion critica corta: solo copiar, no enviar). */
+                pthread_mutex_lock(&mapa_shm->mutex);
+                for (int i = 0; i < MAX_NAVES; i++) {
+                    if (mapa_shm->naves[i].pid != 0 &&
+                        mapa_shm->naves[i].estado == ESTADO_ACTIVO) {
+                        pids[n] = mapa_shm->naves[i].pid;
+                        n++;
                     }
-                    mq_close(cola_nave);
-                } else {
-                    printf("Aviso: La nave %d no tiene su cola abierta aún.\n", ids_naves[i]);
+                }
+                pthread_mutex_unlock(&mapa_shm->mutex);
+
+                MsgAlertaCombustible alerta;
+                alerta.id_estacion = mi_id_estacion;
+                alerta.pid_estacion = getpid();
+                alerta.combustible_actual = combustible;
+
+                for (int i = 0; i < n; i++) {
+                    char nombre_cola_nave[MQ_NAVE_NAME_LEN];
+                    snprintf(nombre_cola_nave, sizeof(nombre_cola_nave),
+                             MQ_NAVE_FMT, pids[i]);
+
+                    mqd_t cola_nave = mq_open(nombre_cola_nave, O_WRONLY);
+                    if (cola_nave != (mqd_t)-1) {
+                        if (mq_send(cola_nave, (const char *)&alerta,
+                                    sizeof(alerta), 0) == -1)
+                            perror("Error al enviar S.O.S a una nave");
+                        else
+                            printf("-> S.O.S (deuterio) enviado a nave pid %d\n", pids[i]);
+                        mq_close(cola_nave);
+                    }
                 }
             }
         }
@@ -99,6 +124,29 @@ int main(){
         return 1;
     }
     printf("Hangar inicializado con 3 espacios disponibles.\n");
+
+    /* Abrir la SHM del mapa para conocer las naves registradas (task #30).
+     * No es fatal si falla: la estacion sigue consumiendo combustible, pero
+     * sin SHM no puede avisar a las naves. */
+    int fd_shm = shm_open(SHM_MAPA_NAME, O_RDWR, 0666);
+    if (fd_shm != -1) {
+        mapa_shm = mmap(NULL, sizeof(Mapa), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+        close(fd_shm);
+        if (mapa_shm == MAP_FAILED) {
+            mapa_shm = NULL;
+            fprintf(stderr, "estacion: no se pudo mapear la SHM; sin alertas a naves\n");
+        } else {
+            /* Si la estacion esta registrada, buscamos nuestro slot por PID. */
+            for (int i = 0; i < MAX_ESTACIONES; i++) {
+                if (mapa_shm->estaciones[i].pid == (int)getpid()) {
+                    mi_id_estacion = i;
+                    break;
+                }
+            }
+        }
+    } else {
+        fprintf(stderr, "estacion: SHM no encontrada (servidor no corriendo); sin alertas a naves\n");
+    }
 
     pthread_t estacion1;
     
