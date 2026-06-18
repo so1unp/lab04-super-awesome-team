@@ -36,6 +36,7 @@
 #include "config.h"
 #include "ipc.h"
 #include "mapa.h"
+#include "semaforos.h"
 
 /* ─── Estado global del proceso nave ──────────────────────────────────── */
 
@@ -65,6 +66,9 @@ typedef struct
     int id_nave;
 } PropulsionArgs;
 
+static const int df[4] = {-1, 0, 1, 0};
+static const int dc[4] = {0, 1, 0, -1};
+
 /* ─── Handler de SIGINT ───────────────────────────────────────────────── */
 
 static void manejar_sigint(int sig)
@@ -92,7 +96,8 @@ static Mapa *abrir_shm_mapa(void)
     {
         if (errno == ENOENT)
             fprintf(stderr, "nave: no se encontro la SHM '%s'. "
-                            "El servidor no esta corriendo.\n", SHM_MAPA_NAME);
+                            "El servidor no esta corriendo.\n",
+                    SHM_MAPA_NAME);
         else
             perror("shm_open");
         return NULL;
@@ -100,7 +105,11 @@ static Mapa *abrir_shm_mapa(void)
 
     mapa = mmap(NULL, sizeof(Mapa), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    if (mapa == MAP_FAILED) { perror("mmap"); return NULL; }
+    if (mapa == MAP_FAILED)
+    {
+        perror("mmap");
+        return NULL;
+    }
 
     return mapa;
 }
@@ -120,19 +129,19 @@ static int registrar_nave(void)
     MsgRegistroResp resp;
 
     memset(&msg, 0, sizeof(msg));
-    msg.op   = REG_OP_REGISTRAR;
+    msg.op = REG_OP_REGISTRAR;
     msg.tipo = CLIENTE_NAVE;
-    msg.pid  = getpid();
-    msg.id   = -1;
+    msg.pid = getpid();
+    msg.id = -1;
     snprintf(nombre_propia, sizeof(nombre_propia), MQ_NAVE_FMT, (int)getpid());
     snprintf(msg.cola_respuesta, sizeof(msg.cola_respuesta), "%s", nombre_propia);
     struct mq_attr attr;
     int id = -1;
 
     /* Cola privada para recibir la respuesta del servidor. */
-    attr.mq_flags = 0; 
+    attr.mq_flags = 0;
     attr.mq_maxmsg = 4;
-    attr.mq_msgsize = sizeof(MsgRegistroResp); 
+    attr.mq_msgsize = sizeof(MsgRegistroResp);
     attr.mq_curmsgs = 0;
     mq_propia = mq_open(nombre_propia, O_CREAT | O_RDONLY, 0666, &attr);
     if (mq_propia == (mqd_t)-1)
@@ -180,7 +189,7 @@ static int registrar_nave(void)
 
     mq_close(mq_propia);
     if (id == -1)
-        mq_unlink(nombre_propia);   /* registro fallido: no dejamos la cola colgada */
+        mq_unlink(nombre_propia); /* registro fallido: no dejamos la cola colgada */
     /* Si el registro fue exitoso, la cola privada se deja viva mientras la
      * nave esta corriendo (otros hilos pueden necesitarla). Se eliminara en
      * el cleanup del main. */
@@ -225,6 +234,23 @@ static void *hilo_soporte_vital(void *arg)
         pthread_mutex_unlock(&mapa->mutex);
     }
     return NULL;
+}
+
+chtype simbolo_nave(int direccion)
+{
+    switch (direccion)
+    {
+    case 0:
+        return '^';
+    case 1:
+        return '>';
+    case 2:
+        return 'v';
+    case 3:
+        return '<';
+    default:
+        return '?';
+    }
 }
 
 /* ─── Hilo radar (task #27) ───────────────────────────────────────────── */
@@ -291,8 +317,9 @@ static void *hilo_radar(void *arg)
                 /* Resaltar la propia nave para distinguirla de otras. */
                 if (celdas_local[f][c].tipo == CELDA_NAVE && celdas_local[f][c].idx == id)
                 {
+
                     wattron(win_mapa, A_BOLD | A_REVERSE);
-                    mvwaddch(win_mapa, f + 1, c + 1, ch);
+                    mvwaddch(win_mapa, f + 1, c + 1, simbolo_nave(nave_local.direccion));
                     wattroff(win_mapa, A_BOLD | A_REVERSE);
                 }
                 else
@@ -347,63 +374,96 @@ static void *hilo_propulsion(void *arg)
 
     while (!g_salir)
     {
+        bool mover = false;
+        int df_mov = 0;
+        int dc_mov = 0;
+
         ch = getch();
 
-        int df = 0, dc = 0;
         switch (ch)
         {
-        case 'w':
-        case 'k':
-        case KEY_UP:
-            df = -1;
-            break;
-        case 's':
-        case 'j':
-        case KEY_DOWN:
-            df = 1;
-            break;
         case 'a':
-        case 'h':
+        case 'A':
         case KEY_LEFT:
-            dc = -1;
+            mapa->naves[id].direccion =
+                (mapa->naves[id].direccion + 3) % 4;
             break;
+
         case 'd':
-        case 'l':
+        case 'D':
         case KEY_RIGHT:
-            dc = 1;
+            mapa->naves[id].direccion =
+                (mapa->naves[id].direccion + 1) % 4;
             break;
+
+        case 'w':
+        case 'W':
+        case KEY_UP:
+            df_mov = df[mapa->naves[id].direccion];
+            dc_mov = dc[mapa->naves[id].direccion];
+            mover = true;
+            break;
+
+        case 's':
+        case 'S':
+        case KEY_DOWN:
+            df_mov = -df[mapa->naves[id].direccion];
+            dc_mov = -dc[mapa->naves[id].direccion];
+            mover = true;
+            break;
+
         default:
             break;
         }
 
-        if (df != 0 || dc != 0)
+        if (mover)
         {
-            int nueva_fila = mapa->naves[id].fila + df;
-            int nueva_col = mapa->naves[id].col + dc;
-            //////Bloque provisional//////
-            mapa->naves[0].fila = nueva_fila;
-            mapa->naves[0].col = nueva_col;
-            mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
-            mapa->celdas[nueva_fila][nueva_col].idx = id;
-            mapa->celdas[nueva_fila - df][nueva_col - dc].tipo = CELDA_VACIA;
-            mapa->celdas[nueva_fila - df][nueva_col - dc].idx = -1;
-            
-            // mover_nave(mapa, id, nueva_fila, nueva_col);
-            pthread_mutex_lock(&mapa->mutex);
+            int fila_actual = mapa->naves[id].fila;
+            int col_actual = mapa->naves[id].col;
+
+            int nueva_fila = fila_actual + df_mov;
+            int nueva_col = col_actual + dc_mov;
             if (mapa->naves[id].combustible > 0)
             {
-                mapa->naves[id].combustible--;
-                if (mapa->naves[id].combustible == 0)
-                    mapa->naves[id].estado = ESTADO_DESACTIVADO;
-            }
-            pthread_mutex_unlock(&mapa->mutex);
-            ////////Debe ser remplazado por una funcion mover nave que contemple los semaforos/////////////
-        }
 
-        /* Poll cada 16ms (~60 Hz) para no quemar CPU. */
+                ////// Bloque provisional //////
+                sem_t *semaforo_celda = semaforo_celda_abrir(nueva_fila, nueva_col);
+
+                if (semaforo_celda != NULL)
+                {
+                    sem_wait(semaforo_celda);
+
+                    pthread_mutex_lock(&mapa->mutex);
+
+                    mapa->naves[id].fila = nueva_fila;
+                    mapa->naves[id].col = nueva_col;
+
+                    mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
+                    mapa->celdas[nueva_fila][nueva_col].idx = id;
+
+                    mapa->celdas[fila_actual][col_actual].tipo = CELDA_VACIA;
+                    mapa->celdas[fila_actual][col_actual].idx = -1;
+
+                    mapa->naves[id].combustible--;
+
+                    if (mapa->naves[id].combustible == 0)
+                        mapa->naves[id].estado = ESTADO_DESACTIVADO;
+
+                    pthread_mutex_unlock(&mapa->mutex);
+
+                    sem_post(semaforo_celda);
+
+                    semaforo_celda_cerrar(semaforo_celda);
+                }
+                ////// Fin bloque provisional //////
+            }
+        }
+        mover = false;
+
         struct timespec ts = {.tv_sec = 0, .tv_nsec = 16000000L};
         nanosleep(&ts, NULL);
     }
+
     return NULL;
 }
 
@@ -436,7 +496,8 @@ int main(int argc, char *argv[])
 
     /* 3) SHM del mapa (creada por el servidor; sin servidor abortamos). */
     mapa = abrir_shm_mapa();
-    if (mapa == NULL) return EXIT_FAILURE;  /* abrir_shm_mapa ya informo el error */
+    if (mapa == NULL)
+        return EXIT_FAILURE; /* abrir_shm_mapa ya informo el error */
 
     /* 4) Registro con el servidor. Sin un id valido la nave no puede operar. */
     id_nave = registrar_nave();
@@ -450,8 +511,8 @@ int main(int argc, char *argv[])
     /* Inicializar campos de la nave en la SHM bajo el mutex. */
     pthread_mutex_lock(&mapa->mutex);
     mapa->naves[id_nave].combustible = NAVE_COMBUSTIBLE_INICIAL;
-    mapa->naves[id_nave].oxigeno     = NAVE_OXIGENO_INICIAL;
-    mapa->naves[id_nave].pid         = getpid();
+    mapa->naves[id_nave].oxigeno = NAVE_OXIGENO_INICIAL;
+    mapa->naves[id_nave].pid = getpid();
     pthread_mutex_unlock(&mapa->mutex);
 
     snprintf(nombre_cola_propia, sizeof(nombre_cola_propia), MQ_NAVE_FMT, (int)getpid());

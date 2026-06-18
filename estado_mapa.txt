@@ -1,16 +1,17 @@
-# CosmiKernel - estado guardado: Wed Jun 17 14:52:09 2026
+# CosmiKernel - estado guardado: Thu Jun 18 15:12:27 2026
 juego_activo=1
 
 # Asteroides (8)
-asteroide fila=3 col=68 deuterio=79 mutexio=19 semaforita=62 kernelio=54 estado=0
-asteroide fila=4 col=31 deuterio=35 mutexio=12 semaforita=28 kernelio=72 estado=0
-asteroide fila=23 col=55 deuterio=78 mutexio=41 semaforita=25 kernelio=17 estado=0
-asteroide fila=23 col=15 deuterio=31 mutexio=50 semaforita=76 kernelio=77 estado=0
-asteroide fila=16 col=1 deuterio=52 mutexio=16 semaforita=44 kernelio=91 estado=0
-asteroide fila=23 col=8 deuterio=4 mutexio=48 semaforita=66 kernelio=32 estado=0
-asteroide fila=9 col=25 deuterio=23 mutexio=69 semaforita=53 kernelio=17 estado=0
-asteroide fila=16 col=77 deuterio=70 mutexio=85 semaforita=84 kernelio=61 estado=0
+asteroide fila=0 col=77 deuterio=95 mutexio=91 semaforita=81 kernelio=45 estado=0
+asteroide fila=23 col=67 deuterio=7 mutexio=97 semaforita=55 kernelio=48 estado=0
+asteroide fila=4 col=59 deuterio=15 mutexio=20 semaforita=23 kernelio=29 estado=0
+asteroide fila=3 col=52 deuterio=4 mutexio=10 semaforita=86 kernelio=98 estado=0
+asteroide fila=10 col=33 deuterio=28 mutexio=31 semaforita=49 kernelio=97 estado=0
+asteroide fila=16 col=67 deuterio=80 mutexio=27 semaforita=97 kernelio=61 estado=0
+asteroide fila=21 col=9 deuterio=70 mutexio=45 semaforita=93 kernelio=25 estado=0
+asteroide fila=23 col=4 deuterio=98 mutexio=7 semaforita=8 kernelio=20 estado=0
 
-# Naves (0)
+# Naves (1)
+nave id=0 pid=310836 fila=3 col=54 combustible=62 oxigeno=0 deuterio=0 mutexio=0 semaforita=0 kernelio=0 estado=1
 
 # Estaciones (0)

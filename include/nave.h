@@ -22,6 +22,7 @@ typedef struct {
     Estado estado;
     int pid;
     int id;  /* indice en Mapa.naves[] */
+    int direccion;
 } Nave;
 
 #endif /* NAVE_H */
