@@ -5,6 +5,7 @@
 #include <mqueue.h>
 #include <fcntl.h>
 #include <sys/stat.h>
+#include <semaphore.h>
 #include <string.h>
 #include "include/estacion.h"
 #include "include/config.h"
@@ -15,11 +16,24 @@ int combustible = ESTACION_COMBUSTIBLE_INICIAL;
 //declaramos el mutex global
 pthread_mutex_t lock;
 
+sem_t *semaforo_hangar;
+
+char nombre_semaforo[] = "/hangar_estacion_1";
+
 void* gasto_combustible(void* arg){
     while(1){
-        usleep(100000);// rapidito para probar
+        usleep(1000000);// rapidito para probar
         /* sleep(DEFAULT_INTERVALO_COMBUSTIBLE); */
         
+        int lugares_libres;
+        sem_getvalue(semaforo_hangar, &lugares_libres);
+
+        if(lugares_libres < 0){
+            lugares_libres = 0; //pongo en 0 para que no sea negativo
+        }
+        
+        int naver_adentro = 3 - lugares_libres;
+
         //bloqueamos antes de tocar la variable compartida
         pthread_mutex_lock(&lock);
         
@@ -79,6 +93,13 @@ int main(){
         return 1;
     }
 
+    semaforo_hangar = sem_open(nombre_semaforo, O_CREAT, 0644, 3);
+    if(semaforo_hangar == SEM_FAILED){
+        printf("Error al crear el semaforo del hangar");
+        return 1;
+    }
+    printf("Hangar inicializado con 3 espacios disponibles.\n");
+
     pthread_t estacion1;
     
     //crea el hilo
@@ -91,6 +112,8 @@ int main(){
     pthread_join(estacion1, NULL);
 
     //limpiamos la memoria del mutex antes de apagar el programa
+    sem_close(semaforo_hangar);
+    sem_unlink(nombre_semaforo); //borra el semaforo del SO
     pthread_mutex_destroy(&lock);
     
     return 0;

@@ -8,11 +8,10 @@
  *
  * Flujo del main:
  *   1. Carga config.txt (radar_refresh_ms, intervalo_oxigeno_nave).
- *   2. Abre la SHM /cosmikernel_mapa creada por el servidor. Si no existe
- *      (modo standalone), la crea con datos demo para poder probar la nave
- *      sin servidor.
- *   3. Intenta registrarse contra el servidor v\xc3\xada MQ_REGISTRO_NAME para
- *      obtener su id en Mapa.naves[]. Si la cola no existe, usa id=0.
+ *   2. Abre la SHM /cosmikernel_mapa creada por el servidor. El servidor
+ *      debe estar corriendo; si la SHM no existe, la nave aborta con error.
+ *   3. Se registra contra el servidor via MQ_REGISTRO_NAME para obtener su
+ *      id en Mapa.naves[]. Si el registro falla, aborta con error.
  *   4. Inicializa ncurses, instala handler de SIGINT.
  *   5. Lanza los hilos radar y soporte_vital.
  *   6. Espera a que se levante la bandera de salida; limpia recursos.
@@ -78,112 +77,30 @@ static void manejar_sigint(int sig)
 
 /*
  * Abre la SHM creada por el servidor en /cosmikernel_mapa.
- * Si no existe (modo standalone para testear sin servidor), crea una SHM
- * propia con datos de prueba.
+ * El servidor es el unico que crea la SHM; si no existe, esta funcion
+ * falla (la nave no puede operar sin servidor).
  *
  * Devuelve el puntero al Mapa mapeado o NULL si falla.
- * En *creada_por_mi se indica si esta nave creo la SHM (para limpiarla al salir).
  */
-static Mapa *abrir_shm_mapa(int *creada_por_mi)
+static Mapa *abrir_shm_mapa(void)
 {
     int fd;
     Mapa *mapa;
 
-    *creada_por_mi = 0;
-
-    /* Intento 1: abrir SHM existente (creada por el servidor). */
     fd = shm_open(SHM_MAPA_NAME, O_RDWR, 0666);
-    if (fd == -1 && errno == ENOENT)
+    if (fd == -1)
     {
-        /* Fallback: el servidor no esta corriendo. Creo una SHM local
-         * y la inicializo con datos demo para poder probar la nave. */
-        fprintf(stderr, "nave: servidor no detectado, modo standalone (SHM demo)\n");
-        fd = shm_open(SHM_MAPA_NAME, O_RDWR | O_CREAT, 0666);
-        if (fd == -1)
-        {
-            perror("shm_open(create)");
-            return NULL;
-        }
-        if (ftruncate(fd, sizeof(Mapa)) == -1)
-        {
-            perror("ftruncate");
-            close(fd);
-            return NULL;
-        }
-        *creada_por_mi = 1;
-    }
-    else if (fd == -1)
-    {
-        perror("shm_open");
+        if (errno == ENOENT)
+            fprintf(stderr, "nave: no se encontro la SHM '%s'. "
+                            "El servidor no esta corriendo.\n", SHM_MAPA_NAME);
+        else
+            perror("shm_open");
         return NULL;
     }
 
     mapa = mmap(NULL, sizeof(Mapa), PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
-    if (mapa == MAP_FAILED)
-    {
-        perror("mmap");
-        return NULL;
-    }
-
-    if (*creada_por_mi)
-    {
-        /* Inicializo la SHM demo: mapa vacio + una nave demo en (5,10)
-         * + un asteroide + una estacion. */
-        pthread_mutexattr_t attr;
-        memset(mapa, 0, sizeof(Mapa));
-        pthread_mutexattr_init(&attr);
-        pthread_mutexattr_setpshared(&attr, PTHREAD_PROCESS_SHARED);
-        pthread_mutex_init(&mapa->mutex, &attr);
-        pthread_mutexattr_destroy(&attr);
-
-        for (int f = 0; f < MAPA_FILAS; f++)
-            for (int c = 0; c < MAPA_COLS; c++)
-            {
-                mapa->celdas[f][c].tipo = CELDA_VACIA;
-                mapa->celdas[f][c].idx = -1;
-            }
-
-        /* Nave demo en (5,10) */
-        mapa->naves[0].fila = 5;
-        mapa->naves[0].col = 10;
-        mapa->naves[0].combustible = NAVE_COMBUSTIBLE_INICIAL;
-        mapa->naves[0].oxigeno = NAVE_OXIGENO_INICIAL;
-        mapa->naves[0].deuterio = 0;
-        mapa->naves[0].mutexio = 0;
-        mapa->naves[0].semaforita = 0;
-        mapa->naves[0].kernelio = 0;
-        mapa->naves[0].estado = ESTADO_ACTIVO;
-        mapa->naves[0].pid = getpid();
-        mapa->naves[0].id = 0;
-        mapa->celdas[5][10].tipo = CELDA_NAVE;
-        mapa->celdas[5][10].idx = 0;
-        mapa->num_naves = 1;
-
-        /* Estacion demo en (2,40) */
-        mapa->estaciones[0].fila = 2;
-        mapa->estaciones[0].col = 40;
-        mapa->estaciones[0].combustible = ESTACION_COMBUSTIBLE_INICIAL;
-        mapa->estaciones[0].estado = ESTADO_ACTIVO;
-        mapa->estaciones[0].id = 0;
-        mapa->celdas[2][40].tipo = CELDA_ESTACION;
-        mapa->celdas[2][40].idx = 0;
-        mapa->num_estaciones = 1;
-
-        /* Asteroide demo en (15,30) */
-        mapa->asteroides[0].fila = 15;
-        mapa->asteroides[0].col = 30;
-        mapa->asteroides[0].deuterio = 50;
-        mapa->asteroides[0].mutexio = 30;
-        mapa->asteroides[0].semaforita = 20;
-        mapa->asteroides[0].kernelio = 10;
-        mapa->asteroides[0].estado = ESTADO_ACTIVO;
-        mapa->celdas[15][30].tipo = CELDA_ASTEROIDE;
-        mapa->celdas[15][30].idx = 0;
-        mapa->num_asteroides = 1;
-
-        mapa->juego_activo = 1;
-    }
+    if (mapa == MAP_FAILED) { perror("mmap"); return NULL; }
 
     return mapa;
 }
@@ -199,16 +116,23 @@ static int registrar_nave(void)
 {
     mqd_t mq_registro, mq_propia;
     char nombre_propia[MQ_NAVE_NAME_LEN];
-    MsgRegistro msg = {.tipo = CLIENTE_NAVE, .pid = getpid()};
+    MsgRegistro msg;
     MsgRegistroResp resp;
+
+    memset(&msg, 0, sizeof(msg));
+    msg.op   = REG_OP_REGISTRAR;
+    msg.tipo = CLIENTE_NAVE;
+    msg.pid  = getpid();
+    msg.id   = -1;
+    snprintf(nombre_propia, sizeof(nombre_propia), MQ_NAVE_FMT, (int)getpid());
+    snprintf(msg.cola_respuesta, sizeof(msg.cola_respuesta), "%s", nombre_propia);
     struct mq_attr attr;
     int id = -1;
 
     /* Cola privada para recibir la respuesta del servidor. */
-    snprintf(nombre_propia, sizeof(nombre_propia), MQ_NAVE_FMT, (int)getpid());
-    attr.mq_flags = 0;
+    attr.mq_flags = 0; 
     attr.mq_maxmsg = 4;
-    attr.mq_msgsize = sizeof(MsgRegistroResp);
+    attr.mq_msgsize = sizeof(MsgRegistroResp); 
     attr.mq_curmsgs = 0;
     mq_propia = mq_open(nombre_propia, O_CREAT | O_RDONLY, 0666, &attr);
     if (mq_propia == (mqd_t)-1)
@@ -221,7 +145,7 @@ static int registrar_nave(void)
     mq_registro = mq_open(MQ_REGISTRO_NAME, O_WRONLY);
     if (mq_registro == (mqd_t)-1)
     {
-        /* Servidor no presente: caemos a fallback id=0 mas arriba. */
+        /* Servidor no presente: retornamos -1 y el main abortara. */
         mq_close(mq_propia);
         mq_unlink(nombre_propia);
         return -1;
@@ -255,8 +179,11 @@ static int registrar_nave(void)
     }
 
     mq_close(mq_propia);
-    /* La cola privada se deja viva mientras la nave esta corriendo (otros
-     * hilos pueden necesitarla). Se eliminara en el cleanup del main. */
+    if (id == -1)
+        mq_unlink(nombre_propia);   /* registro fallido: no dejamos la cola colgada */
+    /* Si el registro fue exitoso, la cola privada se deja viva mientras la
+     * nave esta corriendo (otros hilos pueden necesitarla). Se eliminara en
+     * el cleanup del main. */
     return id;
 }
 
@@ -487,7 +414,6 @@ int main(int argc, char *argv[])
     const char *config_path = (argc > 1) ? argv[1] : CONFIG_PATH;
     Config cfg;
     Mapa *mapa = NULL;
-    int creada_por_mi = 0;
     int id_nave;
     pthread_t th_radar, th_vital, th_propulsion;
     RadarArgs radar_args;
@@ -508,21 +434,26 @@ int main(int argc, char *argv[])
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
 
-    /* 3) SHM del mapa (con fallback a modo standalone). */
-    mapa = abrir_shm_mapa(&creada_por_mi);
-    if (mapa == NULL)
-    {
-        fprintf(stderr, "nave: no se pudo abrir SHM\n");
-        return EXIT_FAILURE;
-    }
+    /* 3) SHM del mapa (creada por el servidor; sin servidor abortamos). */
+    mapa = abrir_shm_mapa();
+    if (mapa == NULL) return EXIT_FAILURE;  /* abrir_shm_mapa ya informo el error */
 
-    /* 4) Registro con el servidor (con fallback a id=0). */
+    /* 4) Registro con el servidor. Sin un id valido la nave no puede operar. */
     id_nave = registrar_nave();
     if (id_nave == -1)
     {
-        fprintf(stderr, "nave: registro fallido, usando id=0 (modo standalone)\n");
-        id_nave = 0;
+        fprintf(stderr, "nave: no se pudo registrar contra el servidor. Abortando.\n");
+        munmap(mapa, sizeof(Mapa));
+        return EXIT_FAILURE;
     }
+
+    /* Inicializar campos de la nave en la SHM bajo el mutex. */
+    pthread_mutex_lock(&mapa->mutex);
+    mapa->naves[id_nave].combustible = NAVE_COMBUSTIBLE_INICIAL;
+    mapa->naves[id_nave].oxigeno     = NAVE_OXIGENO_INICIAL;
+    mapa->naves[id_nave].pid         = getpid();
+    pthread_mutex_unlock(&mapa->mutex);
+
     snprintf(nombre_cola_propia, sizeof(nombre_cola_propia), MQ_NAVE_FMT, (int)getpid());
 
     /* 5) Inicializar ncurses. */
@@ -543,8 +474,6 @@ int main(int argc, char *argv[])
         fprintf(stderr, "nave: terminal demasiado chica (necesita %dx%d, actual %dx%d)\n",
                 MAPA_FILAS + 2, MAPA_COLS + 2 + 28 + 1, filas, cols);
         munmap(mapa, sizeof(Mapa));
-        if (creada_por_mi)
-            shm_unlink(SHM_MAPA_NAME);
         mq_unlink(nombre_cola_propia);
         return EXIT_FAILURE;
     }
@@ -558,8 +487,6 @@ int main(int argc, char *argv[])
         endwin();
         perror("pthread_create(radar)");
         munmap(mapa, sizeof(Mapa));
-        if (creada_por_mi)
-            shm_unlink(SHM_MAPA_NAME);
         mq_unlink(nombre_cola_propia);
         return EXIT_FAILURE;
     }
@@ -574,8 +501,6 @@ int main(int argc, char *argv[])
         endwin();
         perror("pthread_create(soporte_vital)");
         munmap(mapa, sizeof(Mapa));
-        if (creada_por_mi)
-            shm_unlink(SHM_MAPA_NAME);
         mq_unlink(nombre_cola_propia);
         return EXIT_FAILURE;
     }
@@ -600,10 +525,8 @@ int main(int argc, char *argv[])
     /* 8) Cleanup ncurses. */
     endwin();
 
-    /* 9) Cleanup IPC. */
+    /* 9) Cleanup IPC. La SHM la destruye el servidor, no la nave. */
     munmap(mapa, sizeof(Mapa));
-    if (creada_por_mi)
-        shm_unlink(SHM_MAPA_NAME);
     mq_unlink(nombre_cola_propia);
 
     printf("nave: saliendo limpiamente\n");
