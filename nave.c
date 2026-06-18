@@ -316,10 +316,24 @@ static void *hilo_radar(void *arg)
     Mapa *mapa = args->mapa;
     int id = args->id_nave;
 
-    /* Ventanas ncurses: la del mapa a la izquierda, la de estado a la derecha. */
-    int alto_mapa  = MAPA_FILAS + 2;       /* +2 para el borde */
-    int ancho_mapa = MAPA_COLS  + 2;
-    int alto_panel = MAPA_FILAS + 2;
+    /* Ventanas ncurses: el recuadro "Nave #N" a la izquierda (que contiene
+     * arriba las barras de combustible/oxigeno y debajo el mapa), y el panel
+     * de estado a la derecha.
+     *
+     * Layout del recuadro izquierdo:
+     *   fila 0      : borde + titulo " Nave #N "
+     *   fila 1      : (en blanco)
+     *   fila 2      : barra de combustible
+     *   fila 3      : barra de oxigeno
+     *   fila 4..    : el mapa
+     *   ultima fila : borde inferior
+     */
+    int barra_off_y = 2;                          /* fila de la 1ra barra (fila 1 en blanco) */
+    int mapa_off_y  = barra_off_y + 2;            /* blanco + 2 barras => mapa en fila 4 */
+    int mapa_off_x  = 1;                          /* borde izquierdo */
+    int alto_mapa   = mapa_off_y + MAPA_FILAS + 1;   /* mapa + borde inferior */
+    int ancho_mapa  = MAPA_COLS  + 2;
+    int alto_panel  = alto_mapa;                  /* misma altura para alinear */
     int ancho_panel = 28;
 
     WINDOW *win_mapa  = newwin(alto_mapa,  ancho_mapa,  0, 0);
@@ -346,10 +360,32 @@ static void *hilo_radar(void *arg)
         nave_local = naves_local[id];
         pthread_mutex_unlock(&mapa->mutex);
 
-        /* 2) Dibujar mapa. */
+        /* 2) Dibujar el recuadro "Nave #N": titulo, barras y mapa. */
         werase(win_mapa);
         box(win_mapa, 0, 0);
-        mvwprintw(win_mapa, 0, 2, " Mapa %dx%d ", MAPA_FILAS, MAPA_COLS);
+        mvwprintw(win_mapa, 0, 2, " Nave #%d ", id);
+
+        /* 2a) Barras de combustible y oxigeno dentro del recuadro, debajo del
+         * titulo. Muestran el valor numerico antes de la barra de '='. Ambas
+         * barras arrancan en la misma columna (etiqueta+numero de ancho fijo).
+         * El valor (0-100) se escala al ancho disponible del recuadro. */
+        {
+            int prefijo_w = 17;   /* longitud de "Combustible: 100 " */
+            int ancho_barra = (ancho_mapa - 2) - prefijo_w;
+            if (ancho_barra < 1) ancho_barra = 1;
+
+            int comb = nave_local.combustible;
+            int oxi  = nave_local.oxigeno;
+            if (comb < 0) comb = 0; else if (comb > 100) comb = 100;
+            if (oxi  < 0) oxi  = 0; else if (oxi  > 100) oxi  = 100;
+
+            mvwprintw(win_mapa, barra_off_y, 1, "Combustible: %3d ", comb);
+            mvwhline(win_mapa, barra_off_y, 1 + prefijo_w, '=', comb * ancho_barra / 100);
+            mvwprintw(win_mapa, barra_off_y + 1, 1, "Oxigeno:     %3d ", oxi);
+            mvwhline(win_mapa, barra_off_y + 1, 1 + prefijo_w, '=', oxi * ancho_barra / 100);
+        }
+
+        /* 2b) Dibujar el mapa (con offset por el titulo + barras). */
         for (int f = 0; f < MAPA_FILAS; f++)
             for (int c = 0; c < MAPA_COLS; c++)
             {
@@ -361,16 +397,16 @@ static void *hilo_radar(void *arg)
                 if (celdas_local[f][c].tipo == CELDA_NAVE && celdas_local[f][c].idx == id)
                 {
                     wattron(win_mapa, A_BOLD | A_REVERSE);
-                    mvwaddch(win_mapa, f + 1, c + 1, ch);
+                    mvwaddch(win_mapa, mapa_off_y + f, mapa_off_x + c, ch);
                     wattroff(win_mapa, A_BOLD | A_REVERSE);
                 }
                 else
                 {
-                    mvwaddch(win_mapa, f + 1, c + 1, ch);
+                    mvwaddch(win_mapa, mapa_off_y + f, mapa_off_x + c, ch);
                 }
             }
 
-        /* 2b) Etiqueta de deuterio al lado de cada estacion (task #30).
+        /* 2c) Etiqueta de deuterio al lado de cada estacion (task #30).
          * El combustible de la estacion ES deuterio (ver README). Lo dibujamos
          * a la derecha del '#' con un espacio de separacion; ncurses recorta
          * si llega al borde. */
@@ -383,14 +419,14 @@ static void *hilo_radar(void *arg)
                 if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS)
                 {
                     wattron(win_mapa, A_BOLD);
-                    mvwprintw(win_mapa, ef + 1, ec + 2, " Deut: %d",
+                    mvwprintw(win_mapa, mapa_off_y + ef, mapa_off_x + ec + 1, " Deut: %d",
                               estaciones_local[e].combustible);
                     wattroff(win_mapa, A_BOLD);
                 }
             }
         }
 
-        /* 2c) Etiqueta de combustible (deuterio) y oxigeno al lado de cada nave.
+        /* 2d) Etiqueta de combustible (deuterio) y oxigeno al lado de cada nave.
          * Se dibuja a la derecha del '^': "D: <comb>" y debajo "O: <oxig>". */
         for (int nv = 0; nv < MAX_NAVES; nv++)
         {
@@ -402,36 +438,36 @@ static void *hilo_radar(void *arg)
                 {
                     /* La O va una fila abajo; si la nave esta en la ultima
                      * fila, la ponemos una fila arriba para no pisar el borde. */
-                    int fila_d = nf + 1;
-                    int fila_o = (nf + 2 <= MAPA_FILAS) ? nf + 2 : nf;
+                    int fila_d = mapa_off_y + nf;
+                    int fila_o = (nf + 1 < MAPA_FILAS) ? fila_d + 1 : fila_d - 1;
+                    int col_lbl = mapa_off_x + nc + 1;
                     wattron(win_mapa, A_BOLD);
-                    mvwprintw(win_mapa, fila_d, nc + 2, " D: %d", naves_local[nv].combustible);
-                    mvwprintw(win_mapa, fila_o, nc + 2, " O: %d", naves_local[nv].oxigeno);
+                    mvwprintw(win_mapa, fila_d, col_lbl, " D: %d", naves_local[nv].combustible);
+                    mvwprintw(win_mapa, fila_o, col_lbl, " O: %d", naves_local[nv].oxigeno);
                     wattroff(win_mapa, A_BOLD);
                 }
             }
         }
 
         /* 3) Dibujar panel de estado.
-         *    Layout: arriba recursos + inventario, una linea separadora en el
-         *    medio, debajo eventos/alertas SOS, y al pie la identificacion. */
+         *    Layout: inventario (dinero + recursos) arriba, linea separadora
+         *    en el medio, eventos/alertas SOS debajo, identificacion al pie.
+         *    Combustible y oxigeno NO van aca: se muestran como barras arriba. */
         werase(win_panel);
         box(win_panel, 0, 0);
-        mvwprintw(win_panel, 0, 2, " Nave #%d ", id);
+        mvwprintw(win_panel, 0, 2, " Inventario ");
 
-        /* --- Arriba: recursos e inventario --- */
-        mvwprintw(win_panel, 1, 1, "-- Recursos --");
-        mvwprintw(win_panel, 2, 1, "Combustible: %d", nave_local.combustible);
-        mvwprintw(win_panel, 3, 1, "Oxigeno:     %d", nave_local.oxigeno);
+        /* --- Arriba: inventario (dinero + recursos recolectados) --- */
+        /* (linea 1 en blanco) */
+        mvwprintw(win_panel, 2, 1, " $0");   /* TODO: dinero (sistema de transacciones futuro) */
+        /* (linea 3 en blanco) */
+        mvwprintw(win_panel, 4, 1, " Deuterio:   %d", nave_local.deuterio);
+        mvwprintw(win_panel, 5, 1, " Mutexio:    %d", nave_local.mutexio);
+        mvwprintw(win_panel, 6, 1, " Semaforita: %d", nave_local.semaforita);
+        mvwprintw(win_panel, 7, 1, " Kernelio:   %d", nave_local.kernelio);
 
-        mvwprintw(win_panel, 5, 1, "-- Inventario --");
-        mvwprintw(win_panel, 6, 1, " Deuterio:   %d", nave_local.deuterio);
-        mvwprintw(win_panel, 7, 1, " Mutexio:    %d", nave_local.mutexio);
-        mvwprintw(win_panel, 8, 1, " Semaforita: %d", nave_local.semaforita);
-        mvwprintw(win_panel, 9, 1, " Kernelio:   %d", nave_local.kernelio);
-
-        /* --- Linea separadora en el medio --- */
-        mvwhline(win_panel, 11, 1, ACS_HLINE, ancho_panel - 2);
+        /* --- Linea separadora --- */
+        mvwhline(win_panel, 9, 1, ACS_HLINE, ancho_panel - 2);
 
         /* --- Debajo: eventos / alertas SOS (task #30) --- */
         pthread_mutex_lock(&g_alerta.mutex);
@@ -442,21 +478,22 @@ static void *hilo_radar(void *arg)
         int al_tot  = g_alerta.total;
         pthread_mutex_unlock(&g_alerta.mutex);
 
-        mvwprintw(win_panel, 13, 1, "Eventos / Alertas SOS");
+        mvwprintw(win_panel, 11, 1, "Eventos / Alertas SOS");
+        /* (linea 12 en blanco entre el titulo y el contenido) */
         if (al_hay)
         {
             wattron(win_panel, A_BOLD);
             if (al_id >= 0)
-                mvwprintw(win_panel, 14, 1, "Estacion #%d pide", al_id);
+                mvwprintw(win_panel, 13, 1, "Estacion #%d pide", al_id);
             else
-                mvwprintw(win_panel, 14, 1, "Estacion(pid %d)", al_pid);
-            mvwprintw(win_panel, 15, 1, "DEUTERIO! comb=%d", al_comb);
+                mvwprintw(win_panel, 13, 1, "Estacion(pid %d)", al_pid);
+            mvwprintw(win_panel, 14, 1, "DEUTERIO! comb=%d", al_comb);
             wattroff(win_panel, A_BOLD);
-            mvwprintw(win_panel, 16, 1, "recibidas: %d", al_tot);
+            mvwprintw(win_panel, 15, 1, "recibidas: %d", al_tot);
         }
         else
         {
-            mvwprintw(win_panel, 14, 1, "(sin alertas)");
+            mvwprintw(win_panel, 13, 1, "(sin alertas)");
         }
 
         /* --- Al pie: identificacion de la nave --- */
@@ -547,11 +584,11 @@ int main(int argc, char *argv[])
     /* Aviso si la terminal es chica para el layout. */
     int filas, cols;
     getmaxyx(stdscr, filas, cols);
-    if (filas < MAPA_FILAS + 2 || cols < MAPA_COLS + 2 + 28 + 1)
+    if (filas < MAPA_FILAS + 5 || cols < MAPA_COLS + 2 + 28 + 1)
     {
         endwin();
         fprintf(stderr, "nave: terminal demasiado chica (necesita %dx%d, actual %dx%d)\n",
-                MAPA_FILAS + 2, MAPA_COLS + 2 + 28 + 1, filas, cols);
+                MAPA_FILAS + 5, MAPA_COLS + 2 + 28 + 1, filas, cols);
         munmap(mapa, sizeof(Mapa));
         mq_unlink(nombre_cola_propia);
         return EXIT_FAILURE;

@@ -22,6 +22,9 @@ int combustible = ESTACION_COMBUSTIBLE_INICIAL;
 Mapa *mapa_shm = NULL;
 int  mi_id_estacion = -1;  /* slot en Mapa.estaciones[] si la estacion se registro */
 
+/* Segundos entre cada decremento de combustible (se carga de config.txt). */
+int intervalo_combustible_seg = DEFAULT_INTERVALO_COMBUSTIBLE;
+
 //declaramos el mutex global
 pthread_mutex_t lock;
 
@@ -94,8 +97,8 @@ char nombre_semaforo[] = "/hangar_estacion_1";
 void* gasto_combustible(void* arg){
     (void)arg;  /* el hilo no usa argumentos */
     while(1){
-        usleep(1000000);// rapidito para probar
-        /* sleep(DEFAULT_INTERVALO_COMBUSTIBLE); */
+        /* Respetar el intervalo configurado en config.txt. */
+        sleep((unsigned int)intervalo_combustible_seg);
         
         int lugares_libres;
         sem_getvalue(semaforo_hangar, &lugares_libres);
@@ -189,6 +192,12 @@ void* gasto_combustible(void* arg){
 }
 
 int main(){
+    /* Cargar config.txt para respetar el intervalo de consumo de combustible. */
+    Config cfg;
+    if (config_load(CONFIG_PATH, &cfg) == -1)
+        fprintf(stderr, "estacion: arrancando con valores por defecto\n");
+    intervalo_combustible_seg = cfg.intervalo_combustible_estacion;
+
     //inicializamos el mutex antes de arrancar cualquier hilo
     if (pthread_mutex_init(&lock, NULL) != 0) {
         perror("Error al inicializar el mutex");
