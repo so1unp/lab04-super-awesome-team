@@ -333,12 +333,14 @@ static void *hilo_radar(void *arg)
     /* Copia local del mapa para dibujar fuera de la seccion critica. */
     Celda celdas_local[MAPA_FILAS][MAPA_COLS];
     Nave  nave_local;
+    Estacion estaciones_local[MAX_ESTACIONES];
 
     while (!g_salir)
     {
         /* 1) Snapshot bajo mutex (lo mas corto posible). */
         pthread_mutex_lock(&mapa->mutex);
         memcpy(celdas_local, mapa->celdas, sizeof(celdas_local));
+        memcpy(estaciones_local, mapa->estaciones, sizeof(estaciones_local));
         nave_local = mapa->naves[id];
         pthread_mutex_unlock(&mapa->mutex);
 
@@ -364,6 +366,25 @@ static void *hilo_radar(void *arg)
                     mvwaddch(win_mapa, f + 1, c + 1, ch);
                 }
             }
+
+        /* 2b) Etiqueta de deuterio al lado de cada estacion (task #30).
+         * El combustible de la estacion ES deuterio (ver README). Lo dibujamos
+         * a la derecha de la 'E'; ncurses recorta si llega al borde. */
+        for (int e = 0; e < MAX_ESTACIONES; e++)
+        {
+            if (estaciones_local[e].pid != 0)
+            {
+                int ef = estaciones_local[e].fila;
+                int ec = estaciones_local[e].col;
+                if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS)
+                {
+                    wattron(win_mapa, A_BOLD);
+                    mvwprintw(win_mapa, ef + 1, ec + 2, "Deut:%d",
+                              estaciones_local[e].combustible);
+                    wattroff(win_mapa, A_BOLD);
+                }
+            }
+        }
 
         /* 3) Dibujar panel de estado. */
         werase(win_panel);
