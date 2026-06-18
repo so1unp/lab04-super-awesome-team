@@ -333,6 +333,7 @@ static void *hilo_radar(void *arg)
     /* Copia local del mapa para dibujar fuera de la seccion critica. */
     Celda celdas_local[MAPA_FILAS][MAPA_COLS];
     Nave  nave_local;
+    Nave  naves_local[MAX_NAVES];
     Estacion estaciones_local[MAX_ESTACIONES];
 
     while (!g_salir)
@@ -340,8 +341,9 @@ static void *hilo_radar(void *arg)
         /* 1) Snapshot bajo mutex (lo mas corto posible). */
         pthread_mutex_lock(&mapa->mutex);
         memcpy(celdas_local, mapa->celdas, sizeof(celdas_local));
+        memcpy(naves_local, mapa->naves, sizeof(naves_local));
         memcpy(estaciones_local, mapa->estaciones, sizeof(estaciones_local));
-        nave_local = mapa->naves[id];
+        nave_local = naves_local[id];
         pthread_mutex_unlock(&mapa->mutex);
 
         /* 2) Dibujar mapa. */
@@ -351,8 +353,9 @@ static void *hilo_radar(void *arg)
         for (int f = 0; f < MAPA_FILAS; f++)
             for (int c = 0; c < MAPA_COLS; c++)
             {
-                /* unsigned char para evitar warning de conversion de signo
-                 * al pasar a mvwaddch (chtype = unsigned int). */
+                /* El valor del enum TipoCelda ya es el simbolo a dibujar
+                 * (definido en tipos.h, comun a todos los procesos).
+                 * unsigned char para evitar warning de conversion de signo. */
                 unsigned char ch = (unsigned char)celdas_local[f][c].tipo;
                 /* Resaltar la propia nave para distinguirla de otras. */
                 if (celdas_local[f][c].tipo == CELDA_NAVE && celdas_local[f][c].idx == id)
@@ -369,7 +372,8 @@ static void *hilo_radar(void *arg)
 
         /* 2b) Etiqueta de deuterio al lado de cada estacion (task #30).
          * El combustible de la estacion ES deuterio (ver README). Lo dibujamos
-         * a la derecha de la 'E'; ncurses recorta si llega al borde. */
+         * a la derecha del '#' con un espacio de separacion; ncurses recorta
+         * si llega al borde. */
         for (int e = 0; e < MAX_ESTACIONES; e++)
         {
             if (estaciones_local[e].pid != 0)
@@ -379,33 +383,57 @@ static void *hilo_radar(void *arg)
                 if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS)
                 {
                     wattron(win_mapa, A_BOLD);
-                    mvwprintw(win_mapa, ef + 1, ec + 2, "Deut:%d",
+                    mvwprintw(win_mapa, ef + 1, ec + 2, " Deut: %d",
                               estaciones_local[e].combustible);
                     wattroff(win_mapa, A_BOLD);
                 }
             }
         }
 
-        /* 3) Dibujar panel de estado. */
+        /* 2c) Etiqueta de combustible (deuterio) y oxigeno al lado de cada nave.
+         * Se dibuja a la derecha del '^': "D: <comb>" y debajo "O: <oxig>". */
+        for (int nv = 0; nv < MAX_NAVES; nv++)
+        {
+            if (naves_local[nv].pid != 0)
+            {
+                int nf = naves_local[nv].fila;
+                int nc = naves_local[nv].col;
+                if (nf >= 0 && nf < MAPA_FILAS && nc >= 0 && nc < MAPA_COLS)
+                {
+                    /* La O va una fila abajo; si la nave esta en la ultima
+                     * fila, la ponemos una fila arriba para no pisar el borde. */
+                    int fila_d = nf + 1;
+                    int fila_o = (nf + 2 <= MAPA_FILAS) ? nf + 2 : nf;
+                    wattron(win_mapa, A_BOLD);
+                    mvwprintw(win_mapa, fila_d, nc + 2, " D: %d", naves_local[nv].combustible);
+                    mvwprintw(win_mapa, fila_o, nc + 2, " O: %d", naves_local[nv].oxigeno);
+                    wattroff(win_mapa, A_BOLD);
+                }
+            }
+        }
+
+        /* 3) Dibujar panel de estado.
+         *    Layout: arriba recursos + inventario, una linea separadora en el
+         *    medio, debajo eventos/alertas SOS, y al pie la identificacion. */
         werase(win_panel);
         box(win_panel, 0, 0);
         mvwprintw(win_panel, 0, 2, " Nave #%d ", id);
 
-        mvwprintw(win_panel, 1, 1,  "PID:         %d", nave_local.pid);
-        mvwprintw(win_panel, 2, 1,  "Posicion:    (%d,%d)", nave_local.fila, nave_local.col);
-        mvwprintw(win_panel, 3, 1,  "Estado:      %s",
-                  nave_local.estado == ESTADO_ACTIVO ? "ACTIVA" : "DESACTIVADA");
+        /* --- Arriba: recursos e inventario --- */
+        mvwprintw(win_panel, 1, 1, "-- Recursos --");
+        mvwprintw(win_panel, 2, 1, "Combustible: %d", nave_local.combustible);
+        mvwprintw(win_panel, 3, 1, "Oxigeno:     %d", nave_local.oxigeno);
 
-        mvwprintw(win_panel, 5, 1,  "Combustible: %d", nave_local.combustible);
-        mvwprintw(win_panel, 6, 1,  "Oxigeno:     %d", nave_local.oxigeno);
+        mvwprintw(win_panel, 5, 1, "-- Inventario --");
+        mvwprintw(win_panel, 6, 1, " Deuterio:   %d", nave_local.deuterio);
+        mvwprintw(win_panel, 7, 1, " Mutexio:    %d", nave_local.mutexio);
+        mvwprintw(win_panel, 8, 1, " Semaforita: %d", nave_local.semaforita);
+        mvwprintw(win_panel, 9, 1, " Kernelio:   %d", nave_local.kernelio);
 
-        mvwprintw(win_panel, 8, 1,  "-- Inventario --");
-        mvwprintw(win_panel, 9, 1,  " Deuterio:   %d", nave_local.deuterio);
-        mvwprintw(win_panel, 10, 1, " Mutexio:    %d", nave_local.mutexio);
-        mvwprintw(win_panel, 11, 1, " Semaforita: %d", nave_local.semaforita);
-        mvwprintw(win_panel, 12, 1, " Kernelio:   %d", nave_local.kernelio);
+        /* --- Linea separadora en el medio --- */
+        mvwhline(win_panel, 11, 1, ACS_HLINE, ancho_panel - 2);
 
-        /* 3b) Alertas de combustible recibidas de las estaciones (task #30). */
+        /* --- Debajo: eventos / alertas SOS (task #30) --- */
         pthread_mutex_lock(&g_alerta.mutex);
         int al_hay  = g_alerta.hay_alerta;
         int al_id   = g_alerta.id_estacion;
@@ -414,24 +442,29 @@ static void *hilo_radar(void *arg)
         int al_tot  = g_alerta.total;
         pthread_mutex_unlock(&g_alerta.mutex);
 
-        mvwprintw(win_panel, 14, 1, "-- Alertas SOS --");
+        mvwprintw(win_panel, 13, 1, "Eventos / Alertas SOS");
         if (al_hay)
         {
             wattron(win_panel, A_BOLD);
             if (al_id >= 0)
-                mvwprintw(win_panel, 15, 1, "Estacion #%d pide", al_id);
+                mvwprintw(win_panel, 14, 1, "Estacion #%d pide", al_id);
             else
-                mvwprintw(win_panel, 15, 1, "Estacion(pid %d)", al_pid);
-            mvwprintw(win_panel, 16, 1, "DEUTERIO! comb=%d", al_comb);
+                mvwprintw(win_panel, 14, 1, "Estacion(pid %d)", al_pid);
+            mvwprintw(win_panel, 15, 1, "DEUTERIO! comb=%d", al_comb);
             wattroff(win_panel, A_BOLD);
-            mvwprintw(win_panel, 17, 1, "recibidas: %d", al_tot);
+            mvwprintw(win_panel, 16, 1, "recibidas: %d", al_tot);
         }
         else
         {
-            mvwprintw(win_panel, 15, 1, "(sin alertas)");
+            mvwprintw(win_panel, 14, 1, "(sin alertas)");
         }
 
-        mvwprintw(win_panel, alto_panel - 2, 1, "Ctrl+C: salir");
+        /* --- Al pie: identificacion de la nave --- */
+        mvwprintw(win_panel, alto_panel - 4, 1, "PID:      %d", nave_local.pid);
+        mvwprintw(win_panel, alto_panel - 3, 1, "Posicion: (%d,%d)",
+                  nave_local.fila, nave_local.col);
+        mvwprintw(win_panel, alto_panel - 2, 1, "Estado:   %s",
+                  nave_local.estado == ESTADO_ACTIVO ? "ACTIVA" : "DESACTIVADA");
 
         wnoutrefresh(win_mapa);
         wnoutrefresh(win_panel);

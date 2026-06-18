@@ -2,12 +2,18 @@
 #define TIPOS_H
 
 /* ─── Tipos de celda ───────────────────────────────────────────────────── */
+/*
+ * El valor de cada constante es el caracter con que se representa la celda
+ * al dibujar el mapa. Es la representacion comun para todos los procesos
+ * (servidor, naves, estaciones): cualquiera que dibuje el mapa usa estos
+ * mismos simbolos.
+ */
 typedef enum {
-    CELDA_VACIA       = '.',
-    CELDA_NAVE        = '@',
-    CELDA_ESTACION    = 'E',
-    CELDA_ASTEROIDE   = '*',
-    CELDA_NAVE_MUERTA = 'X'   /* nave desactivada (saqueble) */
+    CELDA_VACIA       = ' ',  /* espacio profundo */
+    CELDA_NAVE        = '^',  /* nave espacial */
+    CELDA_ESTACION    = '#',  /* estacion espacial */
+    CELDA_ASTEROIDE   = '@',  /* asteroide */
+    CELDA_NAVE_MUERTA = 'X'   /* nave desactivada (saqueable) */
 } TipoCelda;
 
 /* ─── Estado de un objeto en el juego ─────────────────────────────────── */
