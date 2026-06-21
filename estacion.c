@@ -17,6 +17,16 @@
 Estacion mi_estacion;
 int combustible = ESTACION_COMBUSTIBLE_INICIAL;
 
+// --- INVENTARIO Y CAJA DE LA ESTACIÓN ---
+int oxigeno = 5000;
+int creditos = 10000;
+
+// Stock de minerales comprados
+int stock_deuterio = 0;
+int stock_mutexio = 0;
+int stock_semaforita = 0;
+int stock_kernelio = 0;
+
 /* SHM del mapa: la estacion la lee para conocer los PIDs de las naves
  * registradas y poder enviarles la alerta de combustible (task #30). */
 Mapa *mapa_shm = NULL;
@@ -27,6 +37,12 @@ int intervalo_combustible_seg = DEFAULT_INTERVALO_COMBUSTIBLE;
 
 //declaramos el mutex global
 pthread_mutex_t lock;
+
+// Variables globales para la cola de transacciones
+char nombre_mq_transacciones[MQ_ESTACION_NAME_LEN];
+mqd_t mq_transacciones;
+sem_t *semaforo_hangar;
+char nombre_semaforo[] = "/hangar_estacion_1";
 
 /*
  * Registra la estacion contra el servidor (cola MQ_REGISTRO_NAME) usando el
@@ -90,9 +106,108 @@ static int registrar_estacion(int *fila_out, int *col_out)
     return id;
 }
 
-sem_t *semaforo_hangar;
+// --- HILO DE TRANSACCIONES (CAJERO) ---
+void* atender_transacciones(void* arg) {
+    (void)arg;
+    MsgTransaccion msg;
+    MsgTransaccionResp resp;
+    
+    while(1) {
+        // mq_receive frena el hilo hasta que una nave manda un mensaje
+        ssize_t leidos = mq_receive(mq_transacciones, (char*)&msg, sizeof(msg), NULL);
+        
+        if (leidos > 0) {
+            // Preparamos la respuesta por defecto
+            resp.operacion = msg.operacion;
+            resp.error = 0;
+            resp.cantidad_efectiva = 0;
+            resp.precio_total = 0;
 
-char nombre_semaforo[] = "/hangar_estacion_1";
+            // ZONA CRÍTICA: Bloqueamos el inventario
+            pthread_mutex_lock(&lock);
+            
+            // Procesamos la compra/venta
+            switch(msg.operacion) {
+                case OP_VENDER_DEUTERIO:
+                    stock_deuterio += msg.cantidad;
+                    resp.cantidad_efectiva = msg.cantidad;
+                    resp.precio_total = msg.cantidad * 10;
+                    creditos -= resp.precio_total;
+                    printf("[Transacción] Nave %d VENDIÓ %d Deuterio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    break;
+
+                case OP_VENDER_MUTEXIO:
+                    stock_mutexio += msg.cantidad;
+                    resp.cantidad_efectiva = msg.cantidad;
+                    resp.precio_total = msg.cantidad * 12;
+                    creditos -= resp.precio_total;
+                    printf("[Transacción] Nave %d VENDIÓ %d Mutexio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    break;
+
+                case OP_VENDER_SEMAFORITA:
+                    stock_semaforita += msg.cantidad;
+                    resp.cantidad_efectiva = msg.cantidad;
+                    resp.precio_total = msg.cantidad * 15;
+                    creditos -= resp.precio_total;
+                    printf("[Transacción] Nave %d VENDIÓ %d Semaforita. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    break;
+
+                case OP_VENDER_KERNELIO:
+                    stock_kernelio += msg.cantidad;
+                    resp.cantidad_efectiva = msg.cantidad;
+                    resp.precio_total = msg.cantidad * 20;
+                    creditos -= resp.precio_total;
+                    printf("[Transacción] Nave %d VENDIÓ %d Kernelio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    break;
+                    
+                case OP_COMPRAR_COMBUSTIBLE:
+                    if (combustible >= msg.cantidad) {
+                        combustible -= msg.cantidad;
+                        resp.cantidad_efectiva = msg.cantidad;
+                        resp.precio_total = msg.cantidad * 25;
+                        creditos += resp.precio_total;
+                        printf("[Transacción] Nave %d COMPRÓ %d Combustible por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    } else {
+                        resp.error = 1; // Sin stock
+                        printf("[Alerta] Nave %d intentó comprar %d Combustible (Sin stock).\n", msg.pid_nave, msg.cantidad);
+                    }
+                    break;
+                    
+                case OP_COMPRAR_OXIGENO:
+                    if (oxigeno >= msg.cantidad) {
+                        oxigeno -= msg.cantidad;
+                        resp.cantidad_efectiva = msg.cantidad;
+                        resp.precio_total = msg.cantidad * 5;
+                        creditos += resp.precio_total;
+                        printf("[Transacción] Nave %d COMPRÓ %d Oxígeno por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    } else {
+                        resp.error = 1; // Sin stock
+                        printf("[Alerta] Nave %d intentó comprar %d Oxígeno (Sin stock).\n", msg.pid_nave, msg.cantidad);
+                    }
+                    break;
+            }
+            
+            printf(" -> Caja actual: %d créditos | Oxígeno rest: %d\n", creditos, oxigeno);
+
+            // Liberamos el inventario
+            pthread_mutex_unlock(&lock);
+            
+            // ENVIAMOS LA RESPUESTA A LA NAVE
+            char nombre_cola_resp[MQ_NAVE_NAME_LEN];
+            snprintf(nombre_cola_resp, sizeof(nombre_cola_resp), MQ_NAVE_FMT, msg.pid_nave);
+            
+            mqd_t mq_resp = mq_open(nombre_cola_resp, O_WRONLY);
+            if (mq_resp != (mqd_t)-1) {
+                mq_send(mq_resp, (const char*)&resp, sizeof(resp), 0);
+                mq_close(mq_resp);
+            } else {
+                printf("[Error] No se pudo abrir la cola de respuesta de la nave %d\n", msg.pid_nave);
+            }
+        }
+    }
+    return NULL;
+}
+
 
 void* gasto_combustible(void* arg){
     (void)arg;  /* el hilo no usa argumentos */
@@ -211,10 +326,7 @@ int main(){
     }
     printf("Hangar inicializado con 3 espacios disponibles.\n");
 
-    /* Abrir la SHM del mapa (creada por el servidor). La estacion la usa para:
-     *  - conocer los PIDs de las naves registradas (para mandarles la alerta)
-     *  - reflejar su combustible/deuterio para que el radar lo muestre.
-     * No es fatal si falla: la estacion sigue consumiendo combustible. */
+    /* Abrir la SHM del mapa (creada por el servidor) */
     int fd_shm = shm_open(SHM_MAPA_NAME, O_RDWR, 0666);
     if (fd_shm != -1) {
         mapa_shm = mmap(NULL, sizeof(Mapa), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
@@ -241,6 +353,28 @@ int main(){
             pthread_mutex_unlock(&mapa_shm->mutex);
             printf("Estacion registrada con id %d en (%d,%d)\n",
                    mi_id_estacion, est_fila, est_col);
+
+            // --- INICIO APERTURA COLA DE TRANSACCIONES ---
+            struct mq_attr attr_trx;
+            attr_trx.mq_flags = 0; 
+            attr_trx.mq_maxmsg = 10;
+            attr_trx.mq_msgsize = sizeof(MsgTransaccion); 
+            attr_trx.mq_curmsgs = 0;
+            
+            // Armamos el nombre usando el formato definido en ipc.h
+            snprintf(nombre_mq_transacciones, sizeof(nombre_mq_transacciones), MQ_ESTACION_FMT, mi_id_estacion);
+            mq_transacciones = mq_open(nombre_mq_transacciones, O_CREAT | O_RDONLY, 0666, &attr_trx);
+            
+            if (mq_transacciones == (mqd_t)-1) {
+                perror("Error al crear la cola de transacciones");
+            } else {
+                // Si la cola se abrió bien, lanzamos el hilo del cajero
+                pthread_t hilo_trx;
+                if (pthread_create(&hilo_trx, NULL, atender_transacciones, NULL) != 0) {
+                    perror("Error al crear el hilo de transacciones");
+                }
+            }
+            // ---FIN APERTURA COLA DE TRANSACCIONES ---
         }
     }
 
@@ -256,6 +390,8 @@ int main(){
     pthread_join(estacion1, NULL);
 
     //limpiamos la memoria del mutex antes de apagar el programa
+    mq_close(mq_transacciones);
+    mq_unlink(nombre_mq_transacciones);
     sem_close(semaforo_hangar);
     sem_unlink(nombre_semaforo); //borra el semaforo del SO
     pthread_mutex_destroy(&lock);
