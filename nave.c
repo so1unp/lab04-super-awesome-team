@@ -52,6 +52,10 @@
 /* Bandera de salida (se setea desde el handler de SIGINT). */
 static volatile sig_atomic_t g_salir = 0;
 
+/* Bandera de game over y motivo (sin combustible / sin oxigeno). */
+static volatile sig_atomic_t g_game_over = 0;
+static char g_game_over_motivo[64] = {0};
+
 /* Argumentos pasados al hilo radar. */
 typedef struct
 {
@@ -305,7 +309,16 @@ static void *hilo_soporte_vital(void *arg)
 
         /* Avisar al servidor para que marque la celda como nave muerta ('X'). */
         if (murio)
+        {
+            if (!g_game_over)
+            {
+                snprintf(g_game_over_motivo, sizeof(g_game_over_motivo),
+                         "Sin oxigeno");
+                g_game_over = 1;
+            }
             notificar_op_servidor(REG_OP_DESACTIVAR, id);
+            g_salir = 1;
+        }
     }
     return NULL;
 }
@@ -787,7 +800,16 @@ static void *hilo_extraccion(void *arg)
             if (idx_muerta >= 0)
                 notificar_op_servidor(REG_OP_SAQUEAR_NAVE, idx_muerta);
             if (murio_comb)
+            {
+                if (!g_game_over)
+                {
+                    snprintf(g_game_over_motivo, sizeof(g_game_over_motivo),
+                             "Sin combustible");
+                    g_game_over = 1;
+                }
                 notificar_op_servidor(REG_OP_DESACTIVAR, id);
+                g_salir = 1;
+            }
         }
 
         /* Poll cada 50ms para no quemar CPU. */
@@ -1231,7 +1253,16 @@ static void *hilo_propulsion(void *arg)
                     /* Si nos quedamos sin combustible al movernos, avisar al
                      * servidor para marcar la celda como nave muerta ('X'). */
                     if (murio_comb)
+                    {
+                        if (!g_game_over)
+                        {
+                            snprintf(g_game_over_motivo, sizeof(g_game_over_motivo),
+                                     "Sin combustible");
+                            g_game_over = 1;
+                        }
                         notificar_op_servidor(REG_OP_DESACTIVAR, id);
+                        g_salir = 1;
+                    }
                 }
             }
         }
@@ -1447,7 +1478,32 @@ int main(int argc, char *argv[])
     pthread_join(th_propulsion, NULL);
     pthread_join(th_extraccion, NULL);
 
-    /* 8) Cleanup ncurses. */
+    /* 8) Pantalla de GAME OVER si la tripulacion quedo incapacitada. */
+    if (g_game_over)
+    {
+        int go_filas, go_cols;
+        getmaxyx(stdscr, go_filas, go_cols);
+        nodelay(stdscr, FALSE); /* getch() debe bloquear hasta que el jugador lea */
+        clear();
+        box(stdscr, 0, 0);
+        wattron(stdscr, A_BOLD | A_REVERSE);
+        const char *titulo = "*** GAME OVER ***";
+        mvprintw(go_filas / 2 - 2,
+                 (go_cols - (int)strlen(titulo)) / 2,
+                 "%s", titulo);
+        wattroff(stdscr, A_BOLD | A_REVERSE);
+        mvprintw(go_filas / 2,
+                 (go_cols - (int)strlen(g_game_over_motivo)) / 2,
+                 "%s", g_game_over_motivo);
+        const char *inst = "Presiona cualquier tecla para salir";
+        mvprintw(go_filas / 2 + 2,
+                 (go_cols - (int)strlen(inst)) / 2,
+                 "%s", inst);
+        refresh();
+        getch();
+    }
+
+    /* 9) Cleanup ncurses. */
     endwin();
 
     /* 9) Cleanup IPC. La SHM la destruye el servidor, no la nave. */
