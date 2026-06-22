@@ -545,7 +545,7 @@ static void *hilo_radar(void *arg)
 
         /* --- Arriba: inventario (dinero + recursos recolectados) --- */
         /* (linea 1 en blanco) */
-        mvwprintw(win_panel, 2, 1, " $0");   /* TODO: dinero (sistema de transacciones futuro) */
+        mvwprintw(win_panel, 2, 1, " $%-12d", nave_local.dinero);   /* creditos de la nave (#44) */
         /* (linea 3 en blanco) */
         mvwprintw(win_panel, 4, 1, " Deuterio:   %d", nave_local.deuterio);
         mvwprintw(win_panel, 5, 1, " Mutexio:    %d", nave_local.mutexio);
@@ -795,6 +795,7 @@ static void enviar_transaccion(Mapa *mapa, int id_nave, int id_estacion,
     msg.cantidad = cantidad;
     msg.pid_nave = getpid();
     msg.id_nave = id_nave;
+    msg.dinero_nave = mapa->naves[id_nave].dinero; /* para que la estacion valide la compra */
     /* La estacion responde a MQ_NAVE_TRX_FMT(pid_nave) == cola_trx. */
 
     if (mq_send(mq, (const char *)&msg, sizeof(msg), 0) == -1)
@@ -846,6 +847,11 @@ static void enviar_transaccion(Mapa *mapa, int id_nave, int id_estacion,
             mapa->naves[id_nave].kernelio -= resp.cantidad_efectiva;
             break;
         }
+        /* Dinero: comprar gasta, vender gana (precio que pago / me pagan). */
+        if (op == OP_COMPRAR_COMBUSTIBLE || op == OP_COMPRAR_OXIGENO)
+            mapa->naves[id_nave].dinero -= resp.precio_total;
+        else
+            mapa->naves[id_nave].dinero += resp.precio_total;
         pthread_mutex_unlock(&mapa->mutex);
 
         pthread_mutex_lock(&g_hangar.mutex);
@@ -1220,6 +1226,7 @@ int main(int argc, char *argv[])
     pthread_mutex_lock(&mapa->mutex);
     mapa->naves[id_nave].combustible = NAVE_COMBUSTIBLE_INICIAL;
     mapa->naves[id_nave].oxigeno = NAVE_OXIGENO_INICIAL;
+    mapa->naves[id_nave].dinero = 0; /* arranca sin creditos: mina y vende para ganar (#44) */
     mapa->naves[id_nave].pid = getpid();
     pthread_mutex_unlock(&mapa->mutex);
 

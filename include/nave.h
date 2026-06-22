@@ -23,6 +23,7 @@ typedef struct {
     int pid;
     int id;  /* indice en Mapa.naves[] */
     int direccion;
+    int dinero; /* creditos: gana vendiendo minerales, gasta comprando combustible/oxigeno */
 } Nave;
 
 #endif /* NAVE_H */

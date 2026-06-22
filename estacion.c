@@ -203,10 +203,19 @@ void *atender_transacciones(void *arg)
         {
         case OP_VENDER_DEUTERIO:
             stock_deuterio += msg.cantidad;
+            combustible += msg.cantidad; /* el deuterio recarga el combustible de la estacion */
             resp.cantidad_efectiva = msg.cantidad;
             resp.precio_total = msg.cantidad * precio_deuterio;
             creditos -= resp.precio_total;
-            printf("[Transacción] Nave %d VENDIÓ %d Deuterio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+            /* Reflejar el nuevo combustible en la SHM para el radar de las naves. */
+            if (mapa_shm != NULL && mi_id_estacion >= 0)
+            {
+                pthread_mutex_lock(&mapa_shm->mutex);
+                mapa_shm->estaciones[mi_id_estacion].combustible = combustible;
+                pthread_mutex_unlock(&mapa_shm->mutex);
+            }
+            printf("[Transacción] Nave %d VENDIÓ %d Deuterio (recarga combustible -> %d). Pagamos: %d\n",
+                   msg.pid_nave, msg.cantidad, combustible, resp.precio_total);
             registrar_bitacora(msg.pid_nave, "venta", "deuterio", msg.cantidad, resp.precio_total);
             break;
 
@@ -238,38 +247,54 @@ void *atender_transacciones(void *arg)
             break;
 
         case OP_COMPRAR_COMBUSTIBLE:
-            if (combustible >= msg.cantidad)
+        {
+            /* Limitamos la cantidad por el stock de la estacion Y por el dinero
+             * disponible de la nave (no le vendemos mas de lo que puede pagar). */
+            int cant = msg.cantidad;
+            if (cant > combustible)
+                cant = combustible;
+            if (precio_combustible > 0 && cant * precio_combustible > msg.dinero_nave)
+                cant = msg.dinero_nave / precio_combustible;
+            if (cant > 0)
             {
-                combustible -= msg.cantidad;
-                resp.cantidad_efectiva = msg.cantidad;
-                resp.precio_total = msg.cantidad * precio_combustible;
+                combustible -= cant;
+                resp.cantidad_efectiva = cant;
+                resp.precio_total = cant * precio_combustible;
                 creditos += resp.precio_total;
-                printf("[Transacción] Nave %d COMPRÓ %d Combustible por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
-                registrar_bitacora(msg.pid_nave, "compra", "combustible", msg.cantidad, resp.precio_total);
+                printf("[Transacción] Nave %d COMPRÓ %d Combustible por %d créditos.\n", msg.pid_nave, cant, resp.precio_total);
+                registrar_bitacora(msg.pid_nave, "compra", "combustible", cant, resp.precio_total);
             }
             else
             {
-                resp.error = 1; // Sin stock
-                printf("[Alerta] Nave %d intentó comprar %d Combustible (Sin stock).\n", msg.pid_nave, msg.cantidad);
+                resp.error = 1; // sin stock o sin creditos
+                printf("[Alerta] Nave %d no pudo comprar Combustible (sin stock o sin creditos).\n", msg.pid_nave);
             }
             break;
+        }
 
         case OP_COMPRAR_OXIGENO:
-            if (oxigeno >= msg.cantidad)
+        {
+            int cant = msg.cantidad;
+            if (cant > oxigeno)
+                cant = oxigeno;
+            if (precio_oxigeno > 0 && cant * precio_oxigeno > msg.dinero_nave)
+                cant = msg.dinero_nave / precio_oxigeno;
+            if (cant > 0)
             {
-                oxigeno -= msg.cantidad;
-                resp.cantidad_efectiva = msg.cantidad;
-                resp.precio_total = msg.cantidad * precio_oxigeno;
+                oxigeno -= cant;
+                resp.cantidad_efectiva = cant;
+                resp.precio_total = cant * precio_oxigeno;
                 creditos += resp.precio_total;
-                printf("[Transacción] Nave %d COMPRÓ %d Oxígeno por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
-                registrar_bitacora(msg.pid_nave, "compra", "oxigeno", msg.cantidad, resp.precio_total);
+                printf("[Transacción] Nave %d COMPRÓ %d Oxígeno por %d créditos.\n", msg.pid_nave, cant, resp.precio_total);
+                registrar_bitacora(msg.pid_nave, "compra", "oxigeno", cant, resp.precio_total);
             }
             else
             {
-                resp.error = 1; // Sin stock
-                printf("[Alerta] Nave %d intentó comprar %d Oxígeno (Sin stock).\n", msg.pid_nave, msg.cantidad);
+                resp.error = 1; // sin stock o sin creditos
+                printf("[Alerta] Nave %d no pudo comprar Oxígeno (sin stock o sin creditos).\n", msg.pid_nave);
             }
             break;
+        }
         }
 
         printf(" -> Caja actual: %d créditos | Oxígeno rest: %d\n", creditos, oxigeno);

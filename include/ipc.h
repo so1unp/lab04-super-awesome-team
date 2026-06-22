@@ -115,7 +115,8 @@ typedef struct
     TipoOperacion operacion;
     int cantidad;
     pid_t pid_nave;
-    int id_nave; /* indice en naves[] del Mapa */
+    int id_nave;     /* indice en naves[] del Mapa */
+    int dinero_nave; /* creditos disponibles de la nave (para validar compras) */
 } MsgTransaccion;
 
 /*
