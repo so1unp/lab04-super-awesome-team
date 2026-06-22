@@ -571,8 +571,26 @@ static void *hilo_radar(void *arg)
                 }
             }
 
-        /* (2c/2d) El detalle de estaciones y naves YA NO se dibuja flotando sobre
-         * el mapa (ensuciaba el radar): se muestra en las franjas de abajo. */
+        /* (2c/2d) El detalle (numeros) de estaciones y naves va en las franjas de
+         * abajo, no flotando sobre el mapa. */
+
+        /* 2c) Cada estacion ocupa 3 celdas y se dibuja como "(-)". */
+        for (int e = 0; e < MAX_ESTACIONES; e++)
+        {
+            if (estaciones_local[e].pid == 0)
+                continue;
+            int ef = estaciones_local[e].fila;
+            int ec = estaciones_local[e].col; /* columna central */
+            if (ef < 0 || ef >= MAPA_FILAS)
+                continue;
+            wattron(win_mapa, A_BOLD);
+            if (ec - 1 >= 0)
+                mvwaddch(win_mapa, mapa_off_y + ef, mapa_off_x + ec - 1, '(');
+            mvwaddch(win_mapa, mapa_off_y + ef, mapa_off_x + ec, '-');
+            if (ec + 1 < MAPA_COLS)
+                mvwaddch(win_mapa, mapa_off_y + ef, mapa_off_x + ec + 1, ')');
+            wattroff(win_mapa, A_BOLD);
+        }
 
         /* 2e) Overlay de GAME OVER en el medio del mapa (la nave murio o el juego
          * termino). El mapa queda visible de fondo y el proceso NO se cierra solo:

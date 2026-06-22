@@ -39,6 +39,33 @@ static int posicion_aleatoria_libre(Mapa *mapa, int *fila_out, int *col_out)
     return -1;
 }
 
+/*
+ * Busca una posicion para una estacion, que ocupa 3 celdas horizontales:
+ * (fila, col-1), (fila, col) y (fila, col+1). Devuelve la columna CENTRAL.
+ * col queda en [1, MAPA_COLS-2] para que las 3 celdas entren en el mapa.
+ */
+static int posicion_estacion_libre(Mapa *mapa, int *fila_out, int *col_out)
+{
+    const int max_intentos = MAPA_FILAS * MAPA_COLS * 2;
+
+    for (int i = 0; i < max_intentos; i++)
+    {
+        int fila = rand() % MAPA_FILAS;
+        int col = 1 + rand() % (MAPA_COLS - 2);
+
+        if (mapa->celdas[fila][col - 1].tipo == CELDA_VACIA &&
+            mapa->celdas[fila][col].tipo == CELDA_VACIA &&
+            mapa->celdas[fila][col + 1].tipo == CELDA_VACIA)
+        {
+            *fila_out = fila;
+            *col_out = col;
+            return 0;
+        }
+    }
+
+    return -1;
+}
+
 static int buscar_slot_nave(const Mapa *mapa)
 {
     for (int i = 0; i < MAX_NAVES; i++)
@@ -115,16 +142,16 @@ static void procesar_registrar(Mapa *mapa, const Config *cfg, const MsgRegistro 
     resp.error = 1;
     (void)snprintf(resp.shm_name, sizeof(resp.shm_name), "%s", SHM_MAPA_NAME);
 
-    if (posicion_aleatoria_libre(mapa, &fila, &col) != 0)
-    {
-        responder_registro(req, &resp);
-        return;
-    }
-
     if (req->tipo == CLIENTE_NAVE)
     {
         slot = buscar_slot_nave(mapa);
         if (slot < 0)
+        {
+            responder_registro(req, &resp);
+            return;
+        }
+
+        if (posicion_aleatoria_libre(mapa, &fila, &col) != 0)
         {
             responder_registro(req, &resp);
             return;
@@ -153,6 +180,13 @@ static void procesar_registrar(Mapa *mapa, const Config *cfg, const MsgRegistro 
             return;
         }
 
+        /* La estacion ocupa 3 celdas horizontales (col es la central). */
+        if (posicion_estacion_libre(mapa, &fila, &col) != 0)
+        {
+            responder_registro(req, &resp);
+            return;
+        }
+
         mapa->estaciones[slot].id = slot;
         mapa->estaciones[slot].pid = req->pid;
         mapa->estaciones[slot].fila = fila;
@@ -160,8 +194,12 @@ static void procesar_registrar(Mapa *mapa, const Config *cfg, const MsgRegistro 
         mapa->estaciones[slot].estado = ESTADO_ACTIVO;
         mapa->num_estaciones++;
 
-        mapa->celdas[fila][col].tipo = CELDA_ESTACION;
-        mapa->celdas[fila][col].idx = slot;
+        /* Marcar las 3 celdas (col-1, col, col+1) como estacion, mismo idx. */
+        for (int d = -1; d <= 1; d++)
+        {
+            mapa->celdas[fila][col + d].tipo = CELDA_ESTACION;
+            mapa->celdas[fila][col + d].idx = slot;
+        }
     }
 
     resp.id = slot;
@@ -203,7 +241,9 @@ static void procesar_desregistrar(Mapa *mapa, const Config *cfg, const MsgRegist
         if (idx < 0 || idx >= MAX_ESTACIONES)
             return;
 
-        liberar_celda(mapa, mapa->estaciones[idx].fila, mapa->estaciones[idx].col);
+        /* La estacion ocupa 3 celdas: liberar col-1, col, col+1. */
+        for (int d = -1; d <= 1; d++)
+            liberar_celda(mapa, mapa->estaciones[idx].fila, mapa->estaciones[idx].col + d);
         memset(&mapa->estaciones[idx], 0, sizeof(mapa->estaciones[idx]));
         if (mapa->num_estaciones > 0)
             mapa->num_estaciones--;
