@@ -13,7 +13,8 @@ typedef enum {
     CELDA_NAVE        = '^',  /* nave espacial */
     CELDA_ESTACION    = '#',  /* estacion espacial */
     CELDA_ASTEROIDE   = '@',  /* asteroide */
-    CELDA_NAVE_MUERTA = 'X'   /* nave desactivada (saqueable) */
+    CELDA_NAVE_MUERTA = 'X',  /* nave desactivada (saqueable) */
+    CELDA_BOTIN       = '$'   /* botin que deja un asteroide destruido (se agarra con 'e') */
 } TipoCelda;
 
 /* ─── Estado de un objeto en el juego ─────────────────────────────────── */

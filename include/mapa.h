@@ -7,6 +7,7 @@
 #include "nave.h"
 #include "estacion.h"
 #include "asteroide.h"
+#include "misil.h"
 
 /* ─── Celda del mapa ───────────────────────────────────────────────────── */
 typedef struct {
@@ -25,6 +26,7 @@ typedef struct {
     Nave      naves[MAX_NAVES];
     Estacion  estaciones[MAX_ESTACIONES];
     Asteroide asteroides[MAX_ASTEROIDES];
+    Misil     misiles[MAX_MISILES];
     int       num_naves;
     int       num_estaciones;
     int       num_asteroides;

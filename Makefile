@@ -31,7 +31,7 @@ $(SRC)/%.o: $(SRC)/%.c $(HEADERS)
 # En los binarios, $(filter-out ...) saca los .h del comando de gcc
 # (estan como dependencia solo para forzar la recompilacion, no para linkear).
 $(BIN)/servidor: servidor.c $(SHARED_OBJS) $(HEADERS)
-	$(CC) -o $@ $(filter-out $(HEADERS),$^) $(CFLAGS) $(LDLIBS_COMMON)
+	$(CC) -o $@ $(filter-out $(HEADERS),$^) $(CFLAGS) $(LDLIBS_COMMON) -lm
 
 $(BIN)/nave: nave.c $(SHARED_OBJS) $(HEADERS)
 	$(CC) -o $@ $(filter-out $(HEADERS),$^) $(CFLAGS) $(LDLIBS_NAVE)

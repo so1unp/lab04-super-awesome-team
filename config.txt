@@ -29,3 +29,6 @@ intervalo_combustible_estacion = 2
 
 # Milisegundos entre cada refresco del radar (ncurses) en la nave (rango 10-5000)
 radar_refresh_ms = 100
+
+# Milisegundos entre cada movimiento de los asteroides (menor = mas rapido, rango 20-10000)
+intervalo_asteroides_ms = 2000

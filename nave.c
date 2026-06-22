@@ -8,7 +8,8 @@
  *   - alertas (task #30): recibe avisos de combustible bajo de las estaciones
  *     y los muestra en el panel.
  *   - propulsion (task #19): mueve la nave con el teclado, usando los semaforos
- *     de celda (task #29) para que dos naves no ocupen la misma celda.
+ *     de celda (task #29) para que dos naves no ocupen la misma celda. Con la
+ *     barra espaciadora dispara misiles (combate; el servidor los avanza).
  *   - accion (tasks #21 y #42): con la tecla 'e' actua sobre la celda de frente:
  *     extrae un asteroide (gasta combustible) o saquea una nave muerta (toma sus
  *     recursos + combustible + oxigeno); avisa al servidor para liberar la celda.
@@ -497,6 +498,7 @@ static void *hilo_radar(void *arg)
     Nave nave_local;
     Nave naves_local[MAX_NAVES];
     Estacion estaciones_local[MAX_ESTACIONES];
+    Misil misiles_local[MAX_MISILES];
 
     while (!g_salir)
     {
@@ -504,6 +506,7 @@ static void *hilo_radar(void *arg)
         pthread_mutex_lock(&mapa->mutex);
         memcpy(celdas_local, mapa->celdas, sizeof(celdas_local));
         memcpy(naves_local, mapa->naves, sizeof(naves_local));
+        memcpy(misiles_local, mapa->misiles, sizeof(misiles_local));
         memcpy(estaciones_local, mapa->estaciones, sizeof(estaciones_local));
         nave_local = naves_local[id];
         pthread_mutex_unlock(&mapa->mutex);
@@ -590,6 +593,29 @@ static void *hilo_radar(void *arg)
             if (ec + 1 < MAPA_COLS)
                 mvwaddch(win_mapa, mapa_off_y + ef, mapa_off_x + ec + 1, ')');
             wattroff(win_mapa, A_BOLD);
+        }
+
+        /* 2d) Dibujar los misiles en vuelo (combate). */
+        for (int i = 0; i < MAX_MISILES; i++)
+        {
+            if (!misiles_local[i].activo)
+                continue;
+            int mf = misiles_local[i].fila;
+            int mc = misiles_local[i].col;
+            if (mf >= 0 && mf < MAPA_FILAS && mc >= 0 && mc < MAPA_COLS)
+            {
+                wattron(win_mapa, A_BOLD);
+                mvwaddch(win_mapa, mapa_off_y + mf, mapa_off_x + mc, '*');
+                wattroff(win_mapa, A_BOLD);
+            }
+        }
+
+        /* Si la nave quedo desactivada por cualquier causa (p.ej. un misil
+         * enemigo) y aun no marcamos game over, lo marcamos ahora. */
+        if (nave_local.estado == ESTADO_DESACTIVADO && !g_game_over)
+        {
+            snprintf(g_game_over_motivo, sizeof(g_game_over_motivo), "Nave destruida");
+            g_game_over = 1;
         }
 
         /* 2e) Overlay de GAME OVER en el medio del mapa (la nave murio o el juego
@@ -903,6 +929,14 @@ static void *hilo_extraccion(void *arg)
                         idx_muerta = m;
                     }
                 }
+                else if (tipo_dest == CELDA_BOTIN)
+                {
+                    /* Botin de un asteroide destruido: el monto esta guardado
+                     * en idx_dest. Lo sumamos al dinero y limpiamos la celda. */
+                    mapa->naves[id].dinero += idx_dest;
+                    mapa->celdas[ef][ec].tipo = CELDA_VACIA;
+                    mapa->celdas[ef][ec].idx = -1;
+                }
             }
 
             pthread_mutex_unlock(&mapa->mutex);
@@ -1074,6 +1108,34 @@ static void enviar_transaccion(Mapa *mapa, int id_nave, int id_estacion,
     }
 }
 
+/* ─── Disparo (combate) ───────────────────────────────────────────────── */
+
+/*
+ * Lanza un misil desde la nave `id` en la direccion a la que apunta. El misil
+ * se crea en un slot libre de mapa->misiles[]; el servidor lo avanza y resuelve
+ * las colisiones (destruye asteroides, mata naves). Nace en la celda de la nave
+ * y avanza alejandose, asi no se impacta a si misma.
+ */
+static void disparar_misil(Mapa *mapa, int id)
+{
+    pthread_mutex_lock(&mapa->mutex);
+    int dir = mapa->naves[id].direccion;
+    for (int i = 0; i < MAX_MISILES; i++)
+    {
+        if (!mapa->misiles[i].activo)
+        {
+            mapa->misiles[i].activo = 1;
+            mapa->misiles[i].fila = mapa->naves[id].fila;
+            mapa->misiles[i].col = mapa->naves[id].col;
+            mapa->misiles[i].df = df[dir];
+            mapa->misiles[i].dc = dc[dir];
+            mapa->misiles[i].id_dueno = id;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&mapa->mutex);
+}
+
 /* ─── Hilo de propulsion (task #19, usa semaforos de celda #29) ────────── */
 
 /*
@@ -1161,6 +1223,11 @@ static void *hilo_propulsion(void *arg)
         case 'E':
             /* Tecla de accion: pedimos extraer al hilo de extraccion (#21). */
             g_extraer = 1;
+            break;
+
+        case ' ':
+            /* Disparar un misil en la direccion actual (combate). */
+            disparar_misil(mapa, id);
             break;
 
         /* Transacciones en el hangar (task #44): f=combustible, o=oxigeno,

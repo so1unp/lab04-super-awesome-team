@@ -21,6 +21,7 @@
 11. [Decisiones de diseño y su justificación (el "por qué")](#11-decisiones-de-diseño-y-su-justificación-el-por-qué)
 12. [Tabla resumen de mecanismos de SO](#12-tabla-resumen-de-mecanismos-de-so)
 13. [Preguntas frecuentes para la defensa](#13-preguntas-frecuentes-para-la-defensa)
+14. [Controles del juego (cómo se juega)](#14-controles-del-juego-cómo-se-juega)
 
 ---
 
@@ -649,3 +650,74 @@ libera cuando otra nave la saquea, mediante una operación de IPC dedicada
 R: Por **SHM** va el *estado continuo* del mapa (posiciones, recursos, niveles).
 Por **mensajes** van los *eventos discretos*: registro, transacciones y alertas.
 SHM = compartir estado de alta frecuencia; colas = pedir/responder acciones.
+
+---
+
+## 14. Controles del juego (cómo se juega)
+
+Toda la entrada de la nave la maneja el **hilo de propulsión** (único lector del
+teclado con `getch()` no bloqueante). Estos son los controles reales tal como
+están en el código <ref_snippet file="C:\Users\Ignacio\Desktop\escritorio\SO\laboratorio4\lab04-super-awesome-team\nave.c" lines="1107-1220" />.
+
+### 14.1 Símbolos del mapa
+
+| Símbolo | Significado | Constante |
+|:---:|---|---|
+| `^` `>` `v` `<` | Tu nave (apunta arriba/derecha/abajo/izquierda). La propia se resalta | `CELDA_NAVE` + `simbolo_nave()` |
+| `#` | Estación espacial (acercate para entrar al hangar) | `CELDA_ESTACION` |
+| `@` | Asteroide con recursos | `CELDA_ASTEROIDE` |
+| `X` | Nave muerta (saqueable) | `CELDA_NAVE_MUERTA` |
+| (espacio) | Espacio profundo vacío | `CELDA_VACIA` |
+
+### 14.2 Movimiento (siempre disponible)
+
+| Tecla | Alternativa | Acción | Costo |
+|:---:|:---:|---|---|
+| `w` / `W` | `↑` | **Avanzar** en la dirección a la que apunta la nave | −1 combustible |
+| `s` / `S` | `↓` | **Retroceder** (marcha atrás) | −1 combustible |
+| `a` / `A` | `←` | **Girar** a la izquierda (no se mueve, sólo rota) | gratis |
+| `d` / `D` | `→` | **Girar** a la derecha (no se mueve, sólo rota) | gratis |
+
+> **Importante:** primero se *gira* con `a`/`d` y luego se *avanza* con `w`. La
+> nave se mueve hacia donde apunta la punta (`^ > v <`).
+> El mapa es **toroidal**: si salís por un borde, aparecés por el opuesto.
+
+### 14.3 Acción: minar o saquear (siempre disponible)
+
+| Tecla | Acción | Costo |
+|:---:|---|---|
+| `e` / `E` | Actúa sobre la celda **de enfrente**: si es un asteroide `@` lo **mina** (sus recursos pasan a tu inventario); si es una nave muerta `X` la **saquea** (te llevás sus minerales + combustible + oxígeno + créditos) | extraer asteroide: −5 combustible; saquear: gratis |
+
+### 14.4 Comercio en el hangar (sólo dentro de una estación)
+
+Para **entrar al hangar**: avanzá (`w`) **empujando contra una estación `#`**. No
+te movés sobre ella; tomás una de sus 3 plazas (semáforo contador). Para **salir**
+simplemente movete a otra celda. Estando dentro, el panel muestra estas opciones:
+
+| Tecla | Acción |
+|:---:|---|
+| `f` / `F` | **Comprar combustible** (+10 unidades, paga con tus créditos) |
+| `o` / `O` | **Comprar oxígeno** (+10 unidades, paga con tus créditos) |
+| `1` | **Vender** todo tu **deuterio** |
+| `2` | **Vender** todo tu **mutexio** |
+| `3` | **Vender** toda tu **semaforita** |
+| `4` | **Vender** todo tu **kernelio** |
+
+> Ganás créditos vendiendo minerales y los gastás comprando combustible/oxígeno.
+> La nave arranca con 0 créditos: hay que **minar y vender** para poder reabastecerse.
+
+### 14.5 Salir
+
+| Tecla | Acción |
+|:---:|---|
+| `Ctrl + C` | Cierra la nave de forma ordenada (libera celda, hangar y colas) |
+
+### 14.6 Objetivo y "game over"
+
+- Cuidá el **combustible** (lo gastás al moverte y al minar) y el **oxígeno** (baja
+  solo con el tiempo, cada `intervalo_oxigeno_nave` segundos).
+- Si cualquiera llega a **0**, la tripulación queda incapacitada: aparece
+  **GAME OVER**, tu nave pasa a `X` y otra nave puede saquearte. El proceso **no se
+  cierra solo**: seguís viendo el mapa hasta que salís con `Ctrl+C`.
+- El juego entero termina si **todas las estaciones** se quedan sin combustible
+  (por eso conviene venderles deuterio cuando mandan el SOS).

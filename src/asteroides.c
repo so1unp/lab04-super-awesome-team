@@ -38,6 +38,18 @@ void asteroides_inicializar(Mapa *mapa, const Config *cfg)
         mapa->asteroides[idx].kernelio = rand() % (MAX_RECURSO + 1);
         mapa->asteroides[idx].estado = ESTADO_ACTIVO;
 
+        /* Movimiento: cada asteroide arranca con una direccion (angulo) fija
+         * aleatoria, una velocidad propia y un "giro" por tick. Giro 0 = recto;
+         * chico = serpentea/dobla; grande = circular. 1 de cada 4 va derecho. */
+        mapa->asteroides[idx].pos_fila = (float)fila;
+        mapa->asteroides[idx].pos_col = (float)col;
+        mapa->asteroides[idx].angulo = ((float)rand() / (float)RAND_MAX) * 6.2832f;
+        mapa->asteroides[idx].velocidad = 0.3f + ((float)rand() / (float)RAND_MAX) * 0.7f;
+        if (rand() % 4 == 0)
+            mapa->asteroides[idx].giro = 0.0f;
+        else
+            mapa->asteroides[idx].giro = (((float)rand() / (float)RAND_MAX) - 0.5f) * 0.30f;
+
         mapa->celdas[fila][col].tipo = CELDA_ASTEROIDE;
         mapa->celdas[fila][col].idx = idx;
 

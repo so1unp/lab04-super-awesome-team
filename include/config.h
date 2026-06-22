@@ -16,11 +16,13 @@
 #define DEFAULT_INTERVALO_OXIGENO 1      /* segundos entre decrementos de oxigeno en nave */
 #define DEFAULT_INTERVALO_COMBUSTIBLE 10 /* segundos entre decrementos de combustible en estacion */
 #define DEFAULT_RADAR_REFRESH_MS 100     /* milisegundos entre refrescos del radar (ncurses) */
+#define DEFAULT_INTERVALO_ASTEROIDES_MS 300 /* milisegundos entre movimientos de los asteroides (menor = mas rapido) */
 
 /* Limites del juego */
 #define MAX_ESTACIONES 3
 #define MAX_NAVES 8
 #define MAX_ASTEROIDES 20
+#define MAX_MISILES 32   /* proyectiles simultaneos en vuelo en todo el mapa */
 /*
  * Tamaño del mapa: debe caber en un terminal estándar de 80×24.
  * La nave necesita (MAPA_FILAS+5) filas y (MAPA_COLS+31) columnas.
@@ -49,6 +51,7 @@ typedef struct
     int intervalo_oxigeno_nave;         /* segundos */
     int intervalo_combustible_estacion; /* segundos */
     int radar_refresh_ms;               /* milisegundos entre refrescos del radar */
+    int intervalo_asteroides_ms;        /* milisegundos entre movimientos de asteroides */
 } Config;
 
 /*

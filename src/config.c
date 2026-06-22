@@ -18,6 +18,7 @@ static void config_defaults(Config *cfg)
     cfg->intervalo_oxigeno_nave = DEFAULT_INTERVALO_OXIGENO;
     cfg->intervalo_combustible_estacion = DEFAULT_INTERVALO_COMBUSTIBLE;
     cfg->radar_refresh_ms = DEFAULT_RADAR_REFRESH_MS;
+    cfg->intervalo_asteroides_ms = DEFAULT_INTERVALO_ASTEROIDES_MS;
 }
 
 /*
@@ -61,6 +62,8 @@ static int config_parse_line(const char *line, Config *cfg)
         cfg->intervalo_combustible_estacion = val;
     else if (strcmp(key, "radar_refresh_ms") == 0)
         cfg->radar_refresh_ms = val;
+    else if (strcmp(key, "intervalo_asteroides_ms") == 0)
+        cfg->intervalo_asteroides_ms = val;
     else
         return 0;
 
@@ -109,6 +112,12 @@ static void config_validate(Config *cfg)
                 cfg->radar_refresh_ms, DEFAULT_RADAR_REFRESH_MS);
         cfg->radar_refresh_ms = DEFAULT_RADAR_REFRESH_MS;
     }
+    if (cfg->intervalo_asteroides_ms < 20 || cfg->intervalo_asteroides_ms > 10000)
+    {
+        fprintf(stderr, "config: intervalo_asteroides_ms invalido (%d), usando %d\n",
+                cfg->intervalo_asteroides_ms, DEFAULT_INTERVALO_ASTEROIDES_MS);
+        cfg->intervalo_asteroides_ms = DEFAULT_INTERVALO_ASTEROIDES_MS;
+    }
 }
 
 int config_load(const char *path, Config *cfg)
@@ -148,5 +157,6 @@ void config_print(const Config *cfg)
     printf("  intervalo_oxigeno_nave      = %d s\n", cfg->intervalo_oxigeno_nave);
     printf("  intervalo_combustible_est   = %d s\n", cfg->intervalo_combustible_estacion);
     printf("  radar_refresh_ms            = %d ms\n", cfg->radar_refresh_ms);
+    printf("  intervalo_asteroides_ms     = %d ms\n", cfg->intervalo_asteroides_ms);
     printf("=====================\n");
 }
