@@ -56,6 +56,9 @@ static volatile sig_atomic_t g_salir = 0;
 static volatile sig_atomic_t g_game_over = 0;
 static char g_game_over_motivo[64] = {0};
 
+/* Se setea desde el handler de SIGUSR1: el servidor termino el juego. */
+static volatile sig_atomic_t g_fin_juego = 0;
+
 /* Argumentos pasados al hilo radar. */
 typedef struct
 {
@@ -148,6 +151,20 @@ static void manejar_sigint(int sig)
 {
     (void)sig;
     g_salir = 1;
+}
+
+/*
+ * SIGUSR1: el servidor avisa que el juego termino (estaciones sin combustible
+ * o servidor apagado). En vez de morir (accion por defecto), levantamos las
+ * banderas para que se muestre la pantalla de GAME OVER y el jugador la lea.
+ */
+static void manejar_sigusr1(int sig)
+{
+    (void)sig;
+    g_fin_juego = 1;
+    g_game_over = 1;
+    /* NO seteamos g_salir: queremos seguir mostrando el mapa con el cartel
+     * GAME OVER hasta que el jugador salga con Ctrl+C. */
 }
 
 /* ─── Abrir SHM del mapa ──────────────────────────────────────────────── */
@@ -320,7 +337,8 @@ static void *hilo_soporte_vital(void *arg)
                 g_game_over = 1;
             }
             notificar_op_servidor(REG_OP_DESACTIVAR, id);
-            g_salir = 1;
+            /* NO g_salir: la nave queda incapacitada pero seguimos mostrando
+             * el mapa con el cartel GAME OVER hasta que el jugador salga. */
         }
     }
     return NULL;
@@ -551,8 +569,33 @@ static void *hilo_radar(void *arg)
             }
 
         /* (2c/2d) El detalle de estaciones y naves YA NO se dibuja flotando sobre
-         * el mapa (ensuciaba el radar): se muestra en la franja win_info, debajo
-         * del recuadro del mapa. */
+         * el mapa (ensuciaba el radar): se muestra en las franjas de abajo. */
+
+        /* 2e) Overlay de GAME OVER en el medio del mapa (la nave murio o el juego
+         * termino). El mapa queda visible de fondo y el proceso NO se cierra solo:
+         * el jugador se queda mirando hasta que sale con Ctrl+C. */
+        if (g_game_over)
+        {
+            if (g_fin_juego && g_game_over_motivo[0] == '\0')
+                snprintf(g_game_over_motivo, sizeof(g_game_over_motivo),
+                         "Fin del juego (servidor)");
+
+            const char *txt = "*** GAME OVER ***";
+            int cy = mapa_off_y + MAPA_FILAS / 2;
+            int cx = mapa_off_x + (MAPA_COLS - (int)strlen(txt)) / 2;
+            if (cx < mapa_off_x) cx = mapa_off_x;
+            wattron(win_mapa, A_BOLD | A_REVERSE);
+            mvwprintw(win_mapa, cy, cx, "%s", txt);
+            wattroff(win_mapa, A_BOLD | A_REVERSE);
+            if (g_game_over_motivo[0] != '\0')
+            {
+                int mx = mapa_off_x + (MAPA_COLS - (int)strlen(g_game_over_motivo)) / 2;
+                if (mx < mapa_off_x) mx = mapa_off_x;
+                wattron(win_mapa, A_BOLD);
+                mvwprintw(win_mapa, cy + 1, mx, "%s", g_game_over_motivo);
+                wattroff(win_mapa, A_BOLD);
+            }
+        }
 
         /* 3) Dibujar panel de estado.
          *    Layout: inventario (dinero + recursos) arriba, linea separadora
@@ -856,7 +899,7 @@ static void *hilo_extraccion(void *arg)
                     g_game_over = 1;
                 }
                 notificar_op_servidor(REG_OP_DESACTIVAR, id);
-                g_salir = 1;
+                /* NO g_salir: seguimos mostrando el mapa con GAME OVER. */
             }
         }
 
@@ -1309,7 +1352,7 @@ static void *hilo_propulsion(void *arg)
                             g_game_over = 1;
                         }
                         notificar_op_servidor(REG_OP_DESACTIVAR, id);
-                        g_salir = 1;
+                        /* NO g_salir: seguimos mostrando el mapa con GAME OVER. */
                     }
                 }
             }
@@ -1370,6 +1413,10 @@ int main(int argc, char *argv[])
     sa.sa_flags = 0; /* sin SA_RESTART: queremos cortar nanosleep/sleep */
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+
+    /* SIGUSR1: fin del juego avisado por el servidor (muestra GAME OVER). */
+    sa.sa_handler = manejar_sigusr1;
+    sigaction(SIGUSR1, &sa, NULL);
 
     /* 3) SHM del mapa (creada por el servidor; sin servidor abortamos). */
     mapa = abrir_shm_mapa();
@@ -1526,30 +1573,9 @@ int main(int argc, char *argv[])
     pthread_join(th_propulsion, NULL);
     pthread_join(th_extraccion, NULL);
 
-    /* 8) Pantalla de GAME OVER si la tripulacion quedo incapacitada. */
-    if (g_game_over)
-    {
-        int go_filas, go_cols;
-        getmaxyx(stdscr, go_filas, go_cols);
-        nodelay(stdscr, FALSE); /* getch() debe bloquear hasta que el jugador lea */
-        clear();
-        box(stdscr, 0, 0);
-        wattron(stdscr, A_BOLD | A_REVERSE);
-        const char *titulo = "*** GAME OVER ***";
-        mvprintw(go_filas / 2 - 2,
-                 (go_cols - (int)strlen(titulo)) / 2,
-                 "%s", titulo);
-        wattroff(stdscr, A_BOLD | A_REVERSE);
-        mvprintw(go_filas / 2,
-                 (go_cols - (int)strlen(g_game_over_motivo)) / 2,
-                 "%s", g_game_over_motivo);
-        const char *inst = "Presiona cualquier tecla para salir";
-        mvprintw(go_filas / 2 + 2,
-                 (go_cols - (int)strlen(inst)) / 2,
-                 "%s", inst);
-        refresh();
-        getch();
-    }
+    /* El cartel GAME OVER se mostro como overlay sobre el mapa (en el hilo
+     * radar) mientras el proceso seguia vivo; cuando se llega aca es porque el
+     * jugador salio con Ctrl+C, asi que solo limpiamos. */
 
     /* 9) Cleanup ncurses. */
     endwin();
