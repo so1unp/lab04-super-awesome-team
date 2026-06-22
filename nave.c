@@ -481,13 +481,38 @@ static void *hilo_radar(void *arg)
     int filas_term, cols_term;
     getmaxyx(stdscr, filas_term, cols_term);
     int alto_info = filas_term - alto_mapa;
+    /*
+     * El espacio que sobra debajo del mapa se reparte entre los cuadros de
+     * detalle (naves/estaciones) y una franja de CONTROLES al pie:
+     *   - alto_info >= 6 : entran ambos (controles 3-4 filas, detalle el resto).
+     *   - 3..5           : entra la franja de controles (es lo prioritario); los
+     *                      cuadros de detalle solo si todavia quedan >= 3 filas.
+     *   - < 3            : no entra ninguno.
+     */
+    int alto_controles = 0;
+    int alto_detalle = 0;
+    if (alto_info >= 6)
+    {
+        alto_controles = (alto_info - 3 >= 4) ? 4 : 3;
+        alto_detalle = alto_info - alto_controles;
+    }
+    else if (alto_info >= 3)
+    {
+        alto_controles = 3;            /* prioridad: que SIEMPRE se vean los controles */
+        alto_detalle = alto_info - 3;  /* si queda < 3, los cuadros de detalle no se dibujan */
+    }
+
     WINDOW *win_naves = NULL; /* detalle de naves, debajo del mapa (mismo ancho) */
     WINDOW *win_est = NULL;   /* detalle de estaciones, debajo del panel (mismo ancho) */
-    if (alto_info >= 3)
+    WINDOW *win_ctrl = NULL;  /* franja de controles, al pie (ancho completo) */
+    if (alto_detalle >= 3)
     {
-        win_naves = newwin(alto_info, ancho_mapa, alto_mapa, 0);
-        win_est = newwin(alto_info, ancho_panel, alto_mapa, ancho_mapa + 1);
+        win_naves = newwin(alto_detalle, ancho_mapa, alto_mapa, 0);
+        win_est = newwin(alto_detalle, ancho_panel, alto_mapa, ancho_mapa + 1);
     }
+    if (alto_controles >= 3)
+        win_ctrl = newwin(alto_controles, ancho_mapa + 1 + ancho_panel,
+                          alto_mapa + alto_detalle, 0);
     (void)cols_term;
 
     /* Para que el dibujo del mapa sea estable entre frames. */
@@ -753,7 +778,7 @@ static void *hilo_radar(void *arg)
             mvwprintw(win_naves, 0, 2, " Naves ");
 
             int fila_info = 1;
-            int max_fila = alto_info - 1; /* respetar el borde inferior */
+            int max_fila = alto_detalle - 1; /* respetar el borde inferior */
             for (int nv = 0; nv < MAX_NAVES && fila_info < max_fila; nv++)
             {
                 if (naves_local[nv].pid == 0)
@@ -778,7 +803,7 @@ static void *hilo_radar(void *arg)
             mvwprintw(win_est, 0, 2, " Estaciones ");
 
             int fila_info = 1;
-            int max_fila = alto_info - 1;
+            int max_fila = alto_detalle - 1;
             for (int e = 0; e < MAX_ESTACIONES && fila_info < max_fila; e++)
             {
                 if (estaciones_local[e].pid == 0)
@@ -791,12 +816,38 @@ static void *hilo_radar(void *arg)
             }
         }
 
+        /* 3d) Franja de CONTROLES al pie (ancho completo): le recuerda al
+         *     jugador las teclas. Si la terminal es muy baja, win_ctrl es NULL
+         *     y simplemente no se dibuja. */
+        if (win_ctrl != NULL)
+        {
+            werase(win_ctrl);
+            box(win_ctrl, 0, 0);
+            wattron(win_ctrl, A_BOLD);
+            mvwprintw(win_ctrl, 0, 2, " Controles ");
+            wattroff(win_ctrl, A_BOLD);
+            if (alto_controles >= 4)
+            {
+                mvwprintw(win_ctrl, 1, 2,
+                          "w/s: avanzar/retroceder   a/d: girar   e: minar asteroide @ / saquear nave X   Ctrl+C: salir");
+                mvwprintw(win_ctrl, 2, 2,
+                          "En el hangar (empuja contra #):  f=combustible  o=oxigeno   1=vender Deu  2=Mtx  3=Sem  4=Ker");
+            }
+            else
+            {
+                mvwprintw(win_ctrl, 1, 2,
+                          "w/s mover  a/d girar  e minar/saquear  [hangar #] f comb  o oxi  1-4 vender  Ctrl+C salir");
+            }
+        }
+
         wnoutrefresh(win_mapa);
         wnoutrefresh(win_panel);
         if (win_naves != NULL)
             wnoutrefresh(win_naves);
         if (win_est != NULL)
             wnoutrefresh(win_est);
+        if (win_ctrl != NULL)
+            wnoutrefresh(win_ctrl);
         doupdate();
 
         /* 4) Dormir refresh_ms ms. */
@@ -812,6 +863,8 @@ static void *hilo_radar(void *arg)
         delwin(win_naves);
     if (win_est != NULL)
         delwin(win_est);
+    if (win_ctrl != NULL)
+        delwin(win_ctrl);
     return NULL;
 }
 
