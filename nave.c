@@ -9,6 +9,8 @@
  *     y los muestra en el panel.
  *   - propulsion (task #19): mueve la nave con el teclado, usando los semaforos
  *     de celda (task #29) para que dos naves no ocupen la misma celda.
+ *   - extraccion (task #21): con la tecla 'e' extrae los recursos del asteroide
+ *     que la nave tiene de frente (gasta combustible) y avisa al servidor.
  *
  * Flujo del main:
  *   1. Carga config.txt (radar_refresh_ms, intervalo_oxigeno_nave).
@@ -70,9 +72,26 @@ typedef struct
     int id_nave;
 } PropulsionArgs;
 
+/* Argumentos pasados al hilo de extraccion. */
+typedef struct
+{
+    Mapa *mapa;
+    int id_nave;
+} ExtraccionArgs;
+
 /* Desplazamientos por direccion: 0=arriba, 1=derecha, 2=abajo, 3=izquierda. */
 static const int df[4] = {-1, 0, 1, 0};
 static const int dc[4] = {0, 1, 0, -1};
+
+/*
+ * Bandera de "solicitud de extraccion" (task #21). El hilo de propulsion la
+ * pone en 1 cuando el jugador presiona la tecla de accion; el hilo de
+ * extraccion la consume. Asi un solo hilo (propulsion) lee el teclado.
+ */
+static volatile sig_atomic_t g_extraer = 0;
+
+/* Combustible que gasta la nave en cada extraccion. */
+#define EXTRACCION_COSTO_COMBUSTIBLE 5
 
 /*
  * Estado de la ultima alerta de combustible recibida (task #30).
@@ -569,6 +588,102 @@ static void *hilo_radar(void *arg)
     return NULL;
 }
 
+/* ─── Hilo de extraccion de recursos (task #21) ───────────────────────── */
+
+/*
+ * Notifica al servidor que el asteroide `idx` quedo agotado, para que lo
+ * elimine del mapa (REG_OP_DESACTIVAR_ASTEROIDE). No espera respuesta.
+ */
+static void notificar_asteroide_desactivado(int idx)
+{
+    mqd_t mq = mq_open(MQ_REGISTRO_NAME, O_WRONLY);
+    if (mq == (mqd_t)-1)
+        return;
+
+    MsgRegistro msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.op  = REG_OP_DESACTIVAR_ASTEROIDE;
+    msg.id  = idx;            /* indice en mapa->asteroides[] */
+    msg.pid = getpid();
+    mq_send(mq, (const char *)&msg, sizeof(msg), 0);
+    mq_close(mq);
+}
+
+/*
+ * Hilo de extraccion (task #21). Se activa cuando el hilo de propulsion levanta
+ * la bandera g_extraer (al presionar la tecla de accion). Extrae TODO el
+ * contenido del asteroide que la nave tiene de frente (segun su direccion):
+ *   - suma los 4 minerales del asteroide al inventario de la nave,
+ *   - gasta combustible (EXTRACCION_COSTO_COMBUSTIBLE),
+ *   - vacia y desactiva el asteroide en la SHM (bajo el mutex),
+ *   - notifica al servidor para que lo elimine del mapa.
+ */
+static void *hilo_extraccion(void *arg)
+{
+    ExtraccionArgs *args = (ExtraccionArgs *)arg;
+    Mapa *mapa = args->mapa;
+    int id = args->id_nave;
+
+    while (!g_salir)
+    {
+        if (g_extraer)
+        {
+            g_extraer = 0;             /* consumir la solicitud */
+            int idx_ast = -1;          /* asteroide a eliminar, si se vacio */
+
+            pthread_mutex_lock(&mapa->mutex);
+
+            /* Celda de enfrente segun la direccion de la nave. */
+            int dir = mapa->naves[id].direccion;
+            int ef = mapa->naves[id].fila + df[dir];
+            int ec = mapa->naves[id].col + dc[dir];
+
+            if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS &&
+                mapa->celdas[ef][ec].tipo == CELDA_ASTEROIDE &&
+                mapa->naves[id].combustible > 0)
+            {
+                int a = mapa->celdas[ef][ec].idx;  /* indice del asteroide */
+                if (a >= 0 && a < MAX_ASTEROIDES &&
+                    mapa->asteroides[a].estado == ESTADO_ACTIVO)
+                {
+                    /* Extraer todo el contenido al inventario de la nave. */
+                    mapa->naves[id].deuterio   += mapa->asteroides[a].deuterio;
+                    mapa->naves[id].mutexio    += mapa->asteroides[a].mutexio;
+                    mapa->naves[id].semaforita += mapa->asteroides[a].semaforita;
+                    mapa->naves[id].kernelio   += mapa->asteroides[a].kernelio;
+
+                    mapa->asteroides[a].deuterio = 0;
+                    mapa->asteroides[a].mutexio = 0;
+                    mapa->asteroides[a].semaforita = 0;
+                    mapa->asteroides[a].kernelio = 0;
+
+                    /* Gastar combustible por la extraccion. */
+                    mapa->naves[id].combustible -= EXTRACCION_COSTO_COMBUSTIBLE;
+                    if (mapa->naves[id].combustible <= 0)
+                    {
+                        mapa->naves[id].combustible = 0;
+                        mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                    }
+
+                    /* El asteroide quedo vacio: lo desactivamos y avisamos. */
+                    mapa->asteroides[a].estado = ESTADO_DESACTIVADO;
+                    idx_ast = a;
+                }
+            }
+
+            pthread_mutex_unlock(&mapa->mutex);
+
+            if (idx_ast >= 0)
+                notificar_asteroide_desactivado(idx_ast);
+        }
+
+        /* Poll cada 50ms para no quemar CPU. */
+        struct timespec ts = {.tv_sec = 0, .tv_nsec = 50000000L};
+        nanosleep(&ts, NULL);
+    }
+    return NULL;
+}
+
 /* ─── Hilo de propulsion (task #19, usa semaforos de celda #29) ────────── */
 
 /*
@@ -644,6 +759,12 @@ static void *hilo_propulsion(void *arg)
             df_mov = -df[mapa->naves[id].direccion];
             dc_mov = -dc[mapa->naves[id].direccion];
             mover = 1;
+            break;
+
+        case 'e':
+        case 'E':
+            /* Tecla de accion: pedimos extraer al hilo de extraccion (#21). */
+            g_extraer = 1;
             break;
 
         default:
@@ -741,11 +862,12 @@ int main(int argc, char *argv[])
     Config cfg;
     Mapa *mapa = NULL;
     int id_nave;
-    pthread_t th_radar, th_vital, th_alertas, th_propulsion;
+    pthread_t th_radar, th_vital, th_alertas, th_propulsion, th_extraccion;
     RadarArgs radar_args;
     VitalArgs vital_args;
     AlertaArgs alerta_args;
     PropulsionArgs propulsion_args;
+    ExtraccionArgs extraccion_args;
     struct sigaction sa;
     char nombre_cola_propia[MQ_NAVE_NAME_LEN];
 
@@ -867,11 +989,29 @@ int main(int argc, char *argv[])
         return EXIT_FAILURE;
     }
 
+    /* Hilo de extraccion (task #21). */
+    extraccion_args.mapa = mapa;
+    extraccion_args.id_nave = id_nave;
+    if (pthread_create(&th_extraccion, NULL, hilo_extraccion, &extraccion_args) != 0)
+    {
+        g_salir = 1;
+        pthread_join(th_radar, NULL);
+        pthread_join(th_vital, NULL);
+        pthread_join(th_alertas, NULL);
+        pthread_join(th_propulsion, NULL);
+        endwin();
+        perror("pthread_create(extraccion)");
+        munmap(mapa, sizeof(Mapa));
+        mq_unlink(nombre_cola_propia);
+        return EXIT_FAILURE;
+    }
+
     /* 7) Esperar a que los hilos terminen (cuando g_salir = 1). */
     pthread_join(th_radar, NULL);
     pthread_join(th_vital, NULL);
     pthread_join(th_alertas, NULL);
     pthread_join(th_propulsion, NULL);
+    pthread_join(th_extraccion, NULL);
 
     /* 8) Cleanup ncurses. */
     endwin();

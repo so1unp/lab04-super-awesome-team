@@ -263,6 +263,30 @@ static void procesar_desactivar(Mapa *mapa, const MsgRegistro *req)
     mapa->celdas[mapa->naves[idx].fila][mapa->naves[idx].col].idx = idx;
 }
 
+/*
+ * Asteroide agotado (task #21): la nave lo notifica cuando lo vacia.
+ * Lo marcamos desactivado, liberamos su celda y bajamos el contador.
+ * req->id es el indice del asteroide en mapa->asteroides[].
+ */
+static void procesar_desactivar_asteroide(Mapa *mapa, const MsgRegistro *req)
+{
+    int idx = req->id;
+    if (idx < 0 || idx >= MAX_ASTEROIDES)
+        return;
+
+    /* Solo liberamos la celda si todavia figura como asteroide (no pisar
+     * una nave que pudiera haber entrado). */
+    int af = mapa->asteroides[idx].fila;
+    int ac = mapa->asteroides[idx].col;
+    if (af >= 0 && af < MAPA_FILAS && ac >= 0 && ac < MAPA_COLS &&
+        mapa->celdas[af][ac].tipo == CELDA_ASTEROIDE)
+        liberar_celda(mapa, af, ac);
+
+    mapa->asteroides[idx].estado = ESTADO_DESACTIVADO;
+    if (mapa->num_asteroides > 0)
+        mapa->num_asteroides--;
+}
+
 int registro_servidor_loop(Mapa *mapa, const Config *cfg)
 {
     struct mq_attr attr;
@@ -324,6 +348,9 @@ int registro_servidor_loop(Mapa *mapa, const Config *cfg)
             break;
         case REG_OP_DESACTIVAR_ESTACION:
             procesar_desactivar_estacion(mapa, &req);
+            break;
+        case REG_OP_DESACTIVAR_ASTEROIDE:
+            procesar_desactivar_asteroide(mapa, &req);
             break;
         default:
             break;
