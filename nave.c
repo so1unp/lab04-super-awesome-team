@@ -794,8 +794,14 @@ static void enviar_transaccion(Mapa *mapa, int id_nave, int id_estacion,
  *   a / d (o flechas izq/der): giran la nave (cambian su direccion)
  *   w / s (o flechas arr/abajo): avanzan / retroceden en la direccion actual
  *
- * Para moverse a una celda toma su semaforo binario (sem_wait) de modo que
- * dos naves no puedan ocupar la misma celda, y actualiza la SHM bajo el mutex.
+ * Sincronizacion con los semaforos de celda (task #29). Invariante: la nave
+ * mantiene TOMADO (valor 0) el semaforo de la celda que ocupa.
+ *   - Al arrancar reserva el semaforo de su celda inicial.
+ *   - Al moverse: sem_trywait del semaforo de la celda DESTINO; si lo logra,
+ *     actualiza la SHM (bajo el mutex) y hace sem_post del semaforo de la celda
+ *     ORIGEN. El de la celda destino queda tomado. Usar sem_trywait (no
+ *     sem_wait) evita deadlock cuando dos naves intentan intercambiar celdas.
+ *   - Al salir libera el semaforo de la celda que ocupa.
  * Cada movimiento gasta 1 de combustible; si llega a 0, la nave se desactiva.
  */
 static void *hilo_propulsion(void *arg)
@@ -804,6 +810,21 @@ static void *hilo_propulsion(void *arg)
     Mapa *mapa = args->mapa;
     int id = args->id_nave;
     int ch;
+
+    /* Reservar el semaforo de la celda inicial (mantener el invariante). */
+    {
+        int fi, ci;
+        pthread_mutex_lock(&mapa->mutex);
+        fi = mapa->naves[id].fila;
+        ci = mapa->naves[id].col;
+        pthread_mutex_unlock(&mapa->mutex);
+        sem_t *sem_ini = semaforo_celda_abrir(fi, ci);
+        if (sem_ini != NULL)
+        {
+            sem_trywait(sem_ini); /* reserva la celda inicial si estaba libre */
+            semaforo_celda_cerrar(sem_ini);
+        }
+    }
 
     while (!g_salir)
     {
@@ -1007,33 +1028,50 @@ static void *hilo_propulsion(void *arg)
                     if (en_hangar)
                         salir_hangar(mapa);
 
-                    /* Semaforo de la celda destino (task #29). Si la celda esta
-                     * fuera del mapa semaforo_celda_abrir devuelve NULL. */
-                    sem_t *semaforo_celda = semaforo_celda_abrir(nueva_fila, nueva_col);
-                    if (semaforo_celda != NULL)
+                    /* sem_trywait (no bloqueante): si la celda destino esta
+                     * ocupada, no nos movemos -> sin deadlock (task #29). */
+                    sem_t *sem_destino = semaforo_celda_abrir(nueva_fila, nueva_col);
+                    if (sem_destino != NULL)
                     {
-                        sem_wait(semaforo_celda);
+                        if (sem_trywait(sem_destino) == 0)
+                        {
+                            int movido = 0;
+                            pthread_mutex_lock(&mapa->mutex);
+                            /* Defensa: solo mover si la celda sigue libre. */
+                            if (mapa->celdas[nueva_fila][nueva_col].tipo == CELDA_VACIA)
+                            {
+                                mapa->naves[id].fila = nueva_fila;
+                                mapa->naves[id].col  = nueva_col;
+                                mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
+                                mapa->celdas[nueva_fila][nueva_col].idx  = id;
+                                mapa->celdas[fila_actual][col_actual].tipo = CELDA_VACIA;
+                                mapa->celdas[fila_actual][col_actual].idx  = -1;
+                                mapa->naves[id].combustible--;
+                                if (mapa->naves[id].combustible == 0)
+                                    mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                                movido = 1;
+                            }
+                            pthread_mutex_unlock(&mapa->mutex);
 
-                        pthread_mutex_lock(&mapa->mutex);
-
-                        mapa->naves[id].fila = nueva_fila;
-                        mapa->naves[id].col  = nueva_col;
-
-                        mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
-                        mapa->celdas[nueva_fila][nueva_col].idx  = id;
-
-                        mapa->celdas[fila_actual][col_actual].tipo = CELDA_VACIA;
-                        mapa->celdas[fila_actual][col_actual].idx  = -1;
-
-                        mapa->naves[id].combustible--;
-                        if (mapa->naves[id].combustible == 0)
-                            mapa->naves[id].estado = ESTADO_DESACTIVADO;
-
-                        pthread_mutex_unlock(&mapa->mutex);
-
-                        /* Liberar celda anterior. */
-                        sem_post(semaforo_celda);
-                        semaforo_celda_cerrar(semaforo_celda);
+                            if (movido)
+                            {
+                                /* Liberar semaforo de la celda ORIGEN (la que
+                                 * abandonamos). El de la celda DESTINO queda
+                                 * tomado: la nave ahora ocupa esa celda. */
+                                sem_t *sem_origen = semaforo_celda_abrir(fila_actual, col_actual);
+                                if (sem_origen != NULL)
+                                {
+                                    sem_post(sem_origen);
+                                    semaforo_celda_cerrar(sem_origen);
+                                }
+                            }
+                            else
+                            {
+                                /* No nos movimos: devolver el semaforo destino. */
+                                sem_post(sem_destino);
+                            }
+                        }
+                        semaforo_celda_cerrar(sem_destino);
                     }
                 }
             }
@@ -1046,6 +1084,22 @@ static void *hilo_propulsion(void *arg)
 
     /* Al salir del loop, liberar el hangar si todavia lo tenemos. */
     salir_hangar(mapa);
+
+    /* Liberar el semaforo de la celda que ocupa la nave (invariante). */
+    {
+        int ff, cf;
+        pthread_mutex_lock(&mapa->mutex);
+        ff = mapa->naves[id].fila;
+        cf = mapa->naves[id].col;
+        pthread_mutex_unlock(&mapa->mutex);
+        sem_t *sem_fin = semaforo_celda_abrir(ff, cf);
+        if (sem_fin != NULL)
+        {
+            sem_post(sem_fin);
+            semaforo_celda_cerrar(sem_fin);
+        }
+    }
+
     return NULL;
 }
 
