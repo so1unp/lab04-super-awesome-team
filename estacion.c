@@ -33,8 +33,8 @@ Estacion mi_estacion;
 int combustible = ESTACION_COMBUSTIBLE_INICIAL;
 
 // --- INVENTARIO Y CAJA DE LA ESTACIÓN ---
-int oxigeno = 5000;
-int creditos = 10000;
+int oxigeno = 1000000;
+int creditos = 1000000;
 
 // Stock de minerales comprados
 int stock_deuterio = 0;
@@ -340,7 +340,7 @@ void *gasto_combustible(void *arg)
         // bloqueamos antes de tocar la variable compartida
         pthread_mutex_lock(&lock);
 
-        combustible -= 4;
+        combustible -= 10;
         printf("Combustible actual: %d\n", combustible);
 
         // evaluamos si nos quedamos en cero para apagar todo

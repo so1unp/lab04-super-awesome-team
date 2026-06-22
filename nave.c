@@ -429,6 +429,21 @@ static void *hilo_radar(void *arg)
     if (win_mapa == NULL || win_panel == NULL)
         return NULL;
 
+    /* Franja de info DEBAJO del recuadro del mapa: detalle de cada nave (D, O,
+     * $, minerales) y de cada estacion (deuterio). Usa las filas que sobren en
+     * la terminal (si no hay lugar, queda NULL y no se dibuja). */
+    int filas_term, cols_term;
+    getmaxyx(stdscr, filas_term, cols_term);
+    int alto_info = filas_term - alto_mapa;
+    WINDOW *win_naves = NULL; /* detalle de naves, debajo del mapa (mismo ancho) */
+    WINDOW *win_est = NULL;   /* detalle de estaciones, debajo del panel (mismo ancho) */
+    if (alto_info >= 3)
+    {
+        win_naves = newwin(alto_info, ancho_mapa, alto_mapa, 0);
+        win_est = newwin(alto_info, ancho_panel, alto_mapa, ancho_mapa + 1);
+    }
+    (void)cols_term;
+
     /* Para que el dibujo del mapa sea estable entre frames. */
     nodelay(win_mapa, TRUE);
 
@@ -504,48 +519,9 @@ static void *hilo_radar(void *arg)
                 }
             }
 
-        /* 2c) Etiqueta de deuterio al lado de cada estacion (task #30).
-         * El combustible de la estacion ES deuterio (ver README). Lo dibujamos
-         * a la derecha del '#' con un espacio de separacion; ncurses recorta
-         * si llega al borde. */
-        for (int e = 0; e < MAX_ESTACIONES; e++)
-        {
-            if (estaciones_local[e].pid != 0)
-            {
-                int ef = estaciones_local[e].fila;
-                int ec = estaciones_local[e].col;
-                if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS)
-                {
-                    wattron(win_mapa, A_BOLD);
-                    mvwprintw(win_mapa, mapa_off_y + ef, mapa_off_x + ec + 1, " Deut: %d",
-                              estaciones_local[e].combustible);
-                    wattroff(win_mapa, A_BOLD);
-                }
-            }
-        }
-
-        /* 2d) Etiqueta de combustible (deuterio) y oxigeno al lado de cada nave.
-         * Se dibuja a la derecha de la nave: "D: <comb>" y debajo "O: <oxig>". */
-        for (int nv = 0; nv < MAX_NAVES; nv++)
-        {
-            if (naves_local[nv].pid != 0)
-            {
-                int nf = naves_local[nv].fila;
-                int nc = naves_local[nv].col;
-                if (nf >= 0 && nf < MAPA_FILAS && nc >= 0 && nc < MAPA_COLS)
-                {
-                    /* La O va una fila abajo; si la nave esta en la ultima
-                     * fila, la ponemos una fila arriba para no pisar el borde. */
-                    int fila_d = mapa_off_y + nf;
-                    int fila_o = (nf + 1 < MAPA_FILAS) ? fila_d + 1 : fila_d - 1;
-                    int col_lbl = mapa_off_x + nc + 1;
-                    wattron(win_mapa, A_BOLD);
-                    mvwprintw(win_mapa, fila_d, col_lbl, " D: %d", naves_local[nv].combustible);
-                    mvwprintw(win_mapa, fila_o, col_lbl, " O: %d", naves_local[nv].oxigeno);
-                    wattroff(win_mapa, A_BOLD);
-                }
-            }
-        }
+        /* (2c/2d) El detalle de estaciones y naves YA NO se dibuja flotando sobre
+         * el mapa (ensuciaba el radar): se muestra en la franja win_info, debajo
+         * del recuadro del mapa. */
 
         /* 3) Dibujar panel de estado.
          *    Layout: inventario (dinero + recursos) arriba, linea separadora
@@ -642,8 +618,58 @@ static void *hilo_radar(void *arg)
         mvwprintw(win_panel, alto_panel - 2, 1, "Estado:   %s",
                   nave_local.estado == ESTADO_ACTIVO ? "ACTIVA" : "DESACTIVADA");
 
+        /* 3b) Franja de detalle de NAVES, debajo del mapa (mismo ancho). */
+        if (win_naves != NULL)
+        {
+            werase(win_naves);
+            box(win_naves, 0, 0);
+            mvwprintw(win_naves, 0, 2, " Naves ");
+
+            int fila_info = 1;
+            int max_fila = alto_info - 1; /* respetar el borde inferior */
+            for (int nv = 0; nv < MAX_NAVES && fila_info < max_fila; nv++)
+            {
+                if (naves_local[nv].pid == 0)
+                    continue;
+                mvwprintw(win_naves, fila_info, 2,
+                          "#%d (%d,%d) D:%d O:%d $:%d | Deu:%d Mtx:%d Sem:%d Ker:%d %s",
+                          nv, naves_local[nv].fila, naves_local[nv].col,
+                          naves_local[nv].combustible, naves_local[nv].oxigeno,
+                          naves_local[nv].dinero,
+                          naves_local[nv].deuterio, naves_local[nv].mutexio,
+                          naves_local[nv].semaforita, naves_local[nv].kernelio,
+                          naves_local[nv].estado == ESTADO_ACTIVO ? "" : "(MUERTA)");
+                fila_info++;
+            }
+        }
+
+        /* 3c) Franja de detalle de ESTACIONES, debajo del panel (mismo ancho). */
+        if (win_est != NULL)
+        {
+            werase(win_est);
+            box(win_est, 0, 0);
+            mvwprintw(win_est, 0, 2, " Estaciones ");
+
+            int fila_info = 1;
+            int max_fila = alto_info - 1;
+            for (int e = 0; e < MAX_ESTACIONES && fila_info < max_fila; e++)
+            {
+                if (estaciones_local[e].pid == 0)
+                    continue;
+                mvwprintw(win_est, fila_info, 1, "#%d (%d,%d) D:%d%s",
+                          e, estaciones_local[e].fila, estaciones_local[e].col,
+                          estaciones_local[e].combustible,
+                          estaciones_local[e].estado == ESTADO_ACTIVO ? "" : " off");
+                fila_info++;
+            }
+        }
+
         wnoutrefresh(win_mapa);
         wnoutrefresh(win_panel);
+        if (win_naves != NULL)
+            wnoutrefresh(win_naves);
+        if (win_est != NULL)
+            wnoutrefresh(win_est);
         doupdate();
 
         /* 4) Dormir refresh_ms ms. */
@@ -655,6 +681,10 @@ static void *hilo_radar(void *arg)
 
     delwin(win_mapa);
     delwin(win_panel);
+    if (win_naves != NULL)
+        delwin(win_naves);
+    if (win_est != NULL)
+        delwin(win_est);
     return NULL;
 }
 
