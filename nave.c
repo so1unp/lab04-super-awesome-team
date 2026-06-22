@@ -530,17 +530,23 @@ static void *hilo_radar(void *arg)
             int oxi = nave_local.oxigeno;
             if (comb < 0)
                 comb = 0;
-            else if (comb > 100)
-                comb = 100;
             if (oxi < 0)
                 oxi = 0;
-            else if (oxi > 100)
-                oxi = 100;
+
+            /* El numero muestra el valor REAL (puede pasar de 100). La barra se
+             * llena proporcional a 100 pero se topea al ancho del recuadro: si
+             * hay mas de 100 queda llena, sin pasarse de la pantalla. */
+            int len_comb = comb * ancho_barra / 100;
+            if (len_comb > ancho_barra)
+                len_comb = ancho_barra;
+            int len_oxi = oxi * ancho_barra / 100;
+            if (len_oxi > ancho_barra)
+                len_oxi = ancho_barra;
 
             mvwprintw(win_mapa, barra_off_y, 1, "Combustible: %3d ", comb);
-            mvwhline(win_mapa, barra_off_y, 1 + prefijo_w, '=', comb * ancho_barra / 100);
+            mvwhline(win_mapa, barra_off_y, 1 + prefijo_w, '=', len_comb);
             mvwprintw(win_mapa, barra_off_y + 1, 1, "Oxigeno:     %3d ", oxi);
-            mvwhline(win_mapa, barra_off_y + 1, 1 + prefijo_w, '=', oxi * ancho_barra / 100);
+            mvwhline(win_mapa, barra_off_y + 1, 1 + prefijo_w, '=', len_oxi);
         }
 
         /* 2b) Dibujar el mapa (con offset por el titulo + barras).
@@ -877,11 +883,12 @@ static void *hilo_extraccion(void *arg)
                     if (a >= 0 && a < MAX_ASTEROIDES &&
                         mapa->asteroides[a].estado == ESTADO_ACTIVO)
                     {
-                        /* Extraer todo el contenido al inventario de la nave. */
-                        mapa->naves[id].deuterio += mapa->asteroides[a].deuterio;
-                        mapa->naves[id].mutexio += mapa->asteroides[a].mutexio;
-                        mapa->naves[id].semaforita += mapa->asteroides[a].semaforita;
-                        mapa->naves[id].kernelio += mapa->asteroides[a].kernelio;
+                        /* Aspirar directo con 'e' da x10 (es mas dificil/costoso
+                         * que recoger el botin que deja un misil). */
+                        mapa->naves[id].deuterio += mapa->asteroides[a].deuterio * 10;
+                        mapa->naves[id].mutexio += mapa->asteroides[a].mutexio * 10;
+                        mapa->naves[id].semaforita += mapa->asteroides[a].semaforita * 10;
+                        mapa->naves[id].kernelio += mapa->asteroides[a].kernelio * 10;
 
                         mapa->asteroides[a].deuterio = 0;
                         mapa->asteroides[a].mutexio = 0;
@@ -931,9 +938,20 @@ static void *hilo_extraccion(void *arg)
                 }
                 else if (tipo_dest == CELDA_BOTIN)
                 {
-                    /* Botin de un asteroide destruido: el monto esta guardado
-                     * en idx_dest. Lo sumamos al dinero y limpiamos la celda. */
-                    mapa->naves[id].dinero += idx_dest;
+                    /* Botin de un asteroide destruido: da sus RECURSOS (x1).
+                     * idx_dest apunta al asteroide, que conserva sus minerales. */
+                    int a = idx_dest;
+                    if (a >= 0 && a < MAX_ASTEROIDES)
+                    {
+                        mapa->naves[id].deuterio += mapa->asteroides[a].deuterio;
+                        mapa->naves[id].mutexio += mapa->asteroides[a].mutexio;
+                        mapa->naves[id].semaforita += mapa->asteroides[a].semaforita;
+                        mapa->naves[id].kernelio += mapa->asteroides[a].kernelio;
+                        mapa->asteroides[a].deuterio = 0;
+                        mapa->asteroides[a].mutexio = 0;
+                        mapa->asteroides[a].semaforita = 0;
+                        mapa->asteroides[a].kernelio = 0;
+                    }
                     mapa->celdas[ef][ec].tipo = CELDA_VACIA;
                     mapa->celdas[ef][ec].idx = -1;
                 }

@@ -119,25 +119,18 @@ static void avanzar_misiles(Mapa *mapa)
 
         if (t == CELDA_ASTEROIDE)
         {
-            int valor = 10; /* botin minimo */
+            /* El asteroide destruido deja un botin que CONSERVA sus recursos
+             * (el botin da minerales, no plata). Lo desactivamos para que deje
+             * de moverse, pero NO lo vaciamos: la celda sigue apuntando al
+             * asteroide y la nave recogera sus minerales con 'e'. */
             if (idx >= 0 && idx < MAX_ASTEROIDES)
             {
-                /* El botin vale lo que tenia el asteroide (suma de minerales). */
-                valor = mapa->asteroides[idx].deuterio + mapa->asteroides[idx].mutexio +
-                        mapa->asteroides[idx].semaforita + mapa->asteroides[idx].kernelio;
-                if (valor < 10)
-                    valor = 10;
                 mapa->asteroides[idx].estado = ESTADO_DESACTIVADO;
-                mapa->asteroides[idx].deuterio = 0;
-                mapa->asteroides[idx].mutexio = 0;
-                mapa->asteroides[idx].semaforita = 0;
-                mapa->asteroides[idx].kernelio = 0;
                 if (mapa->num_asteroides > 0)
                     mapa->num_asteroides--;
             }
-            /* El asteroide destruido deja un botin de $ (guardamos el monto en idx). */
             mapa->celdas[nf][nc].tipo = CELDA_BOTIN;
-            mapa->celdas[nf][nc].idx = valor;
+            mapa->celdas[nf][nc].idx = idx; /* apunta al asteroide con sus recursos */
             m->activo = 0;
         }
         else if (t == CELDA_NAVE && idx != m->id_dueno)
