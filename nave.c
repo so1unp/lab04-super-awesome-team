@@ -501,6 +501,11 @@ static void *hilo_radar(void *arg)
         alto_controles = 3;            /* prioridad: que SIEMPRE se vean los controles */
         alto_detalle = alto_info - 3;  /* si queda < 3, los cuadros de detalle no se dibujan */
     }
+    /* Cap: el cuadro de detalle no debe ser tan alto. Alcanza con mostrar hasta
+     * MAX_NAVES naves (8) => MAX_NAVES + 2 filas (contenido + bordes). El resto
+     * del espacio queda libre y los controles suben justo debajo del cuadro. */
+    if (alto_detalle > MAX_NAVES + 2)
+        alto_detalle = MAX_NAVES + 2;
 
     WINDOW *win_naves = NULL; /* detalle de naves, debajo del mapa (mismo ancho) */
     WINDOW *win_est = NULL;   /* detalle de estaciones, debajo del panel (mismo ancho) */
@@ -777,20 +782,43 @@ static void *hilo_radar(void *arg)
             box(win_naves, 0, 0);
             mvwprintw(win_naves, 0, 2, " Naves ");
 
+            /* Ranking: armamos la lista de naves activas y la ordenamos por
+             * dinero (plata) de mayor a menor. MAX_NAVES es chico => insertion sort. */
+            int orden[MAX_NAVES];
+            int n_orden = 0;
+            for (int nv = 0; nv < MAX_NAVES; nv++)
+                if (naves_local[nv].pid != 0)
+                    orden[n_orden++] = nv;
+            for (int i = 1; i < n_orden; i++)
+            {
+                int tmp = orden[i];
+                int j = i - 1;
+                while (j >= 0 && naves_local[orden[j]].dinero < naves_local[tmp].dinero)
+                {
+                    orden[j + 1] = orden[j];
+                    j--;
+                }
+                orden[j + 1] = tmp;
+            }
+
             int fila_info = 1;
             int max_fila = alto_detalle - 1; /* respetar el borde inferior */
-            for (int nv = 0; nv < MAX_NAVES && fila_info < max_fila; nv++)
+            for (int k = 0; k < n_orden && fila_info < max_fila; k++)
             {
-                if (naves_local[nv].pid == 0)
-                    continue;
-                mvwprintw(win_naves, fila_info, 2,
-                          "#%d (%d,%d) D:%d O:%d $:%d | Deu:%d Mtx:%d Sem:%d Ker:%d %s",
-                          nv, naves_local[nv].fila, naves_local[nv].col,
-                          naves_local[nv].combustible, naves_local[nv].oxigeno,
-                          naves_local[nv].dinero,
-                          naves_local[nv].deuterio, naves_local[nv].mutexio,
-                          naves_local[nv].semaforita, naves_local[nv].kernelio,
-                          naves_local[nv].estado == ESTADO_ACTIVO ? "" : "(MUERTA)");
+                int nv = orden[k];
+                char linea[160];
+                /* Formato pedido: "$PLATA - Nave #N (fila,col) D O Inventario:" */
+                snprintf(linea, sizeof(linea),
+                         "$%d - Nave #%d (%d,%d) D:%d O:%d Inventario: Deu:%d Mtx:%d Sem:%d Ker:%d %s",
+                         naves_local[nv].dinero, nv,
+                         naves_local[nv].fila, naves_local[nv].col,
+                         naves_local[nv].combustible, naves_local[nv].oxigeno,
+                         naves_local[nv].deuterio, naves_local[nv].mutexio,
+                         naves_local[nv].semaforita, naves_local[nv].kernelio,
+                         naves_local[nv].estado == ESTADO_ACTIVO ? "" : "(MUERTA)");
+                /* addnstr para no pasar el borde del recuadro (evita que ncurses
+                 * envuelva la linea y rompa el layout). */
+                mvwaddnstr(win_naves, fila_info, 2, linea, ancho_mapa - 4);
                 fila_info++;
             }
         }
@@ -829,14 +857,14 @@ static void *hilo_radar(void *arg)
             if (alto_controles >= 4)
             {
                 mvwprintw(win_ctrl, 1, 2,
-                          "w/s: avanzar/retroceder   a/d: girar   e: minar asteroide @ / saquear nave X   Ctrl+C: salir");
+                          "Mover: w/s o rueda del mouse (avanzar/retroceder)   Girar: a/d   Disparar: ESPACIO");
                 mvwprintw(win_ctrl, 2, 2,
-                          "En el hangar (empuja contra #):  f=combustible  o=oxigeno   1=vender Deu  2=Mtx  3=Sem  4=Ker");
+                          "e: minar asteroide / saquear nave / agarrar botin   Hangar (#): f=combustible  o=oxigeno  1-4=vender");
             }
             else
             {
                 mvwprintw(win_ctrl, 1, 2,
-                          "w/s mover  a/d girar  e minar/saquear  [hangar #] f comb  o oxi  1-4 vender  Ctrl+C salir");
+                          "w/s o rueda: mover   a/d: girar   ESPACIO: disparar   e: minar/saquear/botin   Hangar# f/o/1-4");
             }
         }
 
@@ -1301,6 +1329,28 @@ static void *hilo_propulsion(void *arg)
             disparar_misil(mapa, id);
             break;
 
+        case KEY_MOUSE:
+        {
+            /* Rueda del mouse: arriba = avanzar, abajo = retroceder (igual que w/s). */
+            MEVENT ev;
+            if (getmouse(&ev) == OK)
+            {
+                if (ev.bstate & BUTTON4_PRESSED)
+                {
+                    df_mov = df[mapa->naves[id].direccion];
+                    dc_mov = dc[mapa->naves[id].direccion];
+                    mover = 1;
+                }
+                else if (ev.bstate & BUTTON5_PRESSED)
+                {
+                    df_mov = -df[mapa->naves[id].direccion];
+                    dc_mov = -dc[mapa->naves[id].direccion];
+                    mover = 1;
+                }
+            }
+            break;
+        }
+
         /* Transacciones en el hangar (task #44): f=combustible, o=oxigeno,
          * 1-4 = vender deuterio/mutexio/semaforita/kernelio (todo el stock). */
         case 'f':
@@ -1644,6 +1694,9 @@ int main(int argc, char *argv[])
     noecho();
     curs_set(0); /* ocultar cursor */
     keypad(stdscr, TRUE);
+    /* Rueda del mouse para avanzar/retroceder (BUTTON4=arriba, BUTTON5=abajo). */
+    mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED, NULL);
+    mouseinterval(0); /* sin demora: respuesta inmediata de la rueda */
     nodelay(stdscr, TRUE); /* getch() no bloquea (lo usa el hilo de propulsion) */
     refresh();
 
