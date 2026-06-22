@@ -82,19 +82,21 @@ static const int dc[4] = {0, 1, 0, -1};
  * Lo escribe el hilo de alertas y lo lee el hilo radar para mostrarlo.
  * Como es estado LOCAL del proceso (no de la SHM), usa su propio mutex.
  */
-typedef struct {
+typedef struct
+{
     pthread_mutex_t mutex;
-    int hay_alerta;     /* 0 hasta recibir la primera */
-    int id_estacion;    /* -1 si la estacion no esta registrada */
+    int hay_alerta;  /* 0 hasta recibir la primera */
+    int id_estacion; /* -1 si la estacion no esta registrada */
     int pid_estacion;
-    int combustible;    /* combustible reportado por la estacion */
-    int total;          /* cantidad total de alertas recibidas */
+    int combustible; /* combustible reportado por la estacion */
+    int total;       /* cantidad total de alertas recibidas */
 } EstadoAlerta;
 
-static EstadoAlerta g_alerta;  /* inicializado en main (mutex) y a cero por ser static */
+static EstadoAlerta g_alerta; /* inicializado en main (mutex) y a cero por ser static */
 
 /* Argumentos del hilo de alertas: nombre de la cola privada de la nave. */
-typedef struct {
+typedef struct
+{
     char cola[MQ_NAVE_NAME_LEN];
 } AlertaArgs;
 
@@ -322,21 +324,29 @@ static void *hilo_alertas(void *arg)
 
     mq = mq_open(args->cola, O_RDONLY);
     if (mq == (mqd_t)-1)
-        return NULL;  /* sin cola no hay alertas; no es fatal para la nave */
+        return NULL; /* sin cola no hay alertas; no es fatal para la nave */
 
-    if (mq_getattr(mq, &attr) == -1) { mq_close(mq); return NULL; }
+    if (mq_getattr(mq, &attr) == -1)
+    {
+        mq_close(mq);
+        return NULL;
+    }
     buf = malloc((size_t)attr.mq_msgsize);
-    if (buf == NULL) { mq_close(mq); return NULL; }
+    if (buf == NULL)
+    {
+        mq_close(mq);
+        return NULL;
+    }
 
     while (!g_salir)
     {
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 1;  /* timeout 1s para poder revisar g_salir */
+        ts.tv_sec += 1; /* timeout 1s para poder revisar g_salir */
 
         ssize_t n = mq_timedreceive(mq, buf, (size_t)attr.mq_msgsize, NULL, &ts);
         if (n < 0)
-            continue;  /* ETIMEDOUT / EINTR: reintentar */
+            continue; /* ETIMEDOUT / EINTR: reintentar */
 
         if ((size_t)n >= sizeof(MsgAlertaCombustible))
         {
@@ -344,10 +354,10 @@ static void *hilo_alertas(void *arg)
             memcpy(&al, buf, sizeof(al));
 
             pthread_mutex_lock(&g_alerta.mutex);
-            g_alerta.hay_alerta   = 1;
-            g_alerta.id_estacion  = al.id_estacion;
+            g_alerta.hay_alerta = 1;
+            g_alerta.id_estacion = al.id_estacion;
             g_alerta.pid_estacion = al.pid_estacion;
-            g_alerta.combustible  = al.combustible_actual;
+            g_alerta.combustible = al.combustible_actual;
             g_alerta.total++;
             pthread_mutex_unlock(&g_alerta.mutex);
         }
@@ -380,12 +390,12 @@ static void *hilo_radar(void *arg)
     Mapa *mapa = args->mapa;
     int id = args->id_nave;
 
-    int barra_off_y = 2;                          /* fila de la 1ra barra (fila 1 en blanco) */
-    int mapa_off_y  = barra_off_y + 2;            /* blanco + 2 barras => mapa en fila 4 */
-    int mapa_off_x  = 1;                          /* borde izquierdo */
-    int alto_mapa   = mapa_off_y + MAPA_FILAS + 1;   /* mapa + borde inferior */
-    int ancho_mapa  = MAPA_COLS  + 2;
-    int alto_panel  = alto_mapa;                  /* misma altura para alinear */
+    int barra_off_y = 2;                         /* fila de la 1ra barra (fila 1 en blanco) */
+    int mapa_off_y = barra_off_y + 2;            /* blanco + 2 barras => mapa en fila 4 */
+    int mapa_off_x = 1;                          /* borde izquierdo */
+    int alto_mapa = mapa_off_y + MAPA_FILAS + 1; /* mapa + borde inferior */
+    int ancho_mapa = MAPA_COLS + 2;
+    int alto_panel = alto_mapa; /* misma altura para alinear */
     int ancho_panel = 28;
 
     WINDOW *win_mapa = newwin(alto_mapa, ancho_mapa, 0, 0);
@@ -398,8 +408,8 @@ static void *hilo_radar(void *arg)
 
     /* Copia local del mapa para dibujar fuera de la seccion critica. */
     Celda celdas_local[MAPA_FILAS][MAPA_COLS];
-    Nave  nave_local;
-    Nave  naves_local[MAX_NAVES];
+    Nave nave_local;
+    Nave naves_local[MAX_NAVES];
     Estacion estaciones_local[MAX_ESTACIONES];
 
     while (!g_salir)
@@ -422,14 +432,21 @@ static void *hilo_radar(void *arg)
          * barras arrancan en la misma columna (etiqueta+numero de ancho fijo).
          * El valor (0-100) se escala al ancho disponible del recuadro. */
         {
-            int prefijo_w = 17;   /* longitud de "Combustible: 100 " */
+            int prefijo_w = 17; /* longitud de "Combustible: 100 " */
             int ancho_barra = (ancho_mapa - 2) - prefijo_w;
-            if (ancho_barra < 1) ancho_barra = 1;
+            if (ancho_barra < 1)
+                ancho_barra = 1;
 
             int comb = nave_local.combustible;
-            int oxi  = nave_local.oxigeno;
-            if (comb < 0) comb = 0; else if (comb > 100) comb = 100;
-            if (oxi  < 0) oxi  = 0; else if (oxi  > 100) oxi  = 100;
+            int oxi = nave_local.oxigeno;
+            if (comb < 0)
+                comb = 0;
+            else if (comb > 100)
+                comb = 100;
+            if (oxi < 0)
+                oxi = 0;
+            else if (oxi > 100)
+                oxi = 100;
 
             mvwprintw(win_mapa, barra_off_y, 1, "Combustible: %3d ", comb);
             mvwhline(win_mapa, barra_off_y, 1 + prefijo_w, '=', comb * ancho_barra / 100);
@@ -521,7 +538,7 @@ static void *hilo_radar(void *arg)
 
         /* --- Arriba: inventario (dinero + recursos recolectados) --- */
         /* (linea 1 en blanco) */
-        mvwprintw(win_panel, 2, 1, " $0");   /* TODO: dinero (sistema de transacciones futuro) */
+        mvwprintw(win_panel, 2, 1, " $0"); /* TODO: dinero (sistema de transacciones futuro) */
         /* (linea 3 en blanco) */
         mvwprintw(win_panel, 4, 1, " Deuterio:   %d", nave_local.deuterio);
         mvwprintw(win_panel, 5, 1, " Mutexio:    %d", nave_local.mutexio);
@@ -533,11 +550,11 @@ static void *hilo_radar(void *arg)
 
         /* --- Debajo: eventos / alertas SOS (task #30) --- */
         pthread_mutex_lock(&g_alerta.mutex);
-        int al_hay  = g_alerta.hay_alerta;
-        int al_id   = g_alerta.id_estacion;
-        int al_pid  = g_alerta.pid_estacion;
+        int al_hay = g_alerta.hay_alerta;
+        int al_id = g_alerta.id_estacion;
+        int al_pid = g_alerta.pid_estacion;
         int al_comb = g_alerta.combustible;
-        int al_tot  = g_alerta.total;
+        int al_tot = g_alerta.total;
         pthread_mutex_unlock(&g_alerta.mutex);
 
         mvwprintw(win_panel, 11, 1, "Eventos / Alertas SOS");
