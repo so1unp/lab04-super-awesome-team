@@ -7,23 +7,213 @@
 #include <sys/stat.h>
 #include <semaphore.h>
 #include <string.h>
+#include <sys/mman.h>
+#include <time.h>
 #include "include/estacion.h"
 #include "include/config.h"
+#include "include/ipc.h"
+#include "include/mapa.h"
 
 Estacion mi_estacion;
 int combustible = ESTACION_COMBUSTIBLE_INICIAL;
 
+// --- INVENTARIO Y CAJA DE LA ESTACIÓN ---
+int oxigeno = 5000;
+int creditos = 10000;
+
+// Stock de minerales comprados
+int stock_deuterio = 0;
+int stock_mutexio = 0;
+int stock_semaforita = 0;
+int stock_kernelio = 0;
+
+/* SHM del mapa: la estacion la lee para conocer los PIDs de las naves
+ * registradas y poder enviarles la alerta de combustible (task #30). */
+Mapa *mapa_shm = NULL;
+int  mi_id_estacion = -1;  /* slot en Mapa.estaciones[] si la estacion se registro */
+
+/* Segundos entre cada decremento de combustible (se carga de config.txt). */
+int intervalo_combustible_seg = DEFAULT_INTERVALO_COMBUSTIBLE;
+
 //declaramos el mutex global
 pthread_mutex_t lock;
 
+// Variables globales para la cola de transacciones
+char nombre_mq_transacciones[MQ_ESTACION_NAME_LEN];
+mqd_t mq_transacciones;
 sem_t *semaforo_hangar;
-
 char nombre_semaforo[] = "/hangar_estacion_1";
 
+/*
+ * Registra la estacion contra el servidor (cola MQ_REGISTRO_NAME) usando el
+ * protocolo de ipc.h. El servidor le asigna un slot en Mapa.estaciones[],
+ * una posicion y marca la celda como CELDA_ESTACION (asi aparece la 'E' en
+ * el mapa). Devuelve el id/slot asignado o -1 si falla.
+ * La posicion asignada se devuelve en *fila_out / *col_out (si no son NULL).
+ */
+static int registrar_estacion(int *fila_out, int *col_out)
+{
+    mqd_t mq_registro, mq_resp;
+    char nombre_resp[MQ_ESTACION_NAME_LEN];
+    MsgRegistro msg;
+    MsgRegistroResp resp;
+    struct mq_attr attr;
+    struct timespec ts;
+    int id = -1;
+
+    /* Cola temporal para recibir la respuesta del registro. */
+    snprintf(nombre_resp, sizeof(nombre_resp), MQ_ESTACION_FMT, (int)getpid());
+
+    memset(&msg, 0, sizeof(msg));
+    msg.op   = REG_OP_REGISTRAR;
+    msg.tipo = CLIENTE_ESTACION;
+    msg.pid  = getpid();
+    msg.id   = -1;
+    snprintf(msg.cola_respuesta, sizeof(msg.cola_respuesta), "%s", nombre_resp);
+
+    attr.mq_flags = 0; attr.mq_maxmsg = 4;
+    attr.mq_msgsize = sizeof(MsgRegistroResp); attr.mq_curmsgs = 0;
+    mq_resp = mq_open(nombre_resp, O_CREAT | O_RDONLY, 0666, &attr);
+    if (mq_resp == (mqd_t)-1) { perror("mq_open(estacion resp)"); return -1; }
+
+    mq_registro = mq_open(MQ_REGISTRO_NAME, O_WRONLY);
+    if (mq_registro == (mqd_t)-1)
+    {
+        mq_close(mq_resp); mq_unlink(nombre_resp);
+        return -1;
+    }
+
+    if (mq_send(mq_registro, (const char *)&msg, sizeof(msg), 0) == -1)
+    {
+        perror("mq_send(registro estacion)");
+        mq_close(mq_registro); mq_close(mq_resp); mq_unlink(nombre_resp);
+        return -1;
+    }
+    mq_close(mq_registro);
+
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += 3;  /* timeout 3s para no colgarnos si el servidor no responde */
+    if (mq_timedreceive(mq_resp, (char *)&resp, sizeof(resp), NULL, &ts) != -1 &&
+        resp.error == 0)
+    {
+        id = resp.id;
+        if (fila_out) *fila_out = resp.fila;
+        if (col_out)  *col_out  = resp.col;
+    }
+
+    mq_close(mq_resp);
+    mq_unlink(nombre_resp);  /* la estacion no usa esta cola despues del registro */
+    return id;
+}
+
+// --- HILO DE TRANSACCIONES (CAJERO) ---
+void* atender_transacciones(void* arg) {
+    (void)arg;
+    MsgTransaccion msg;
+    MsgTransaccionResp resp;
+    
+    while(1) {
+        // mq_receive frena el hilo hasta que una nave manda un mensaje
+        ssize_t leidos = mq_receive(mq_transacciones, (char*)&msg, sizeof(msg), NULL);
+        
+        if (leidos > 0) {
+            // Preparamos la respuesta por defecto
+            resp.operacion = msg.operacion;
+            resp.error = 0;
+            resp.cantidad_efectiva = 0;
+            resp.precio_total = 0;
+
+            // ZONA CRÍTICA: Bloqueamos el inventario
+            pthread_mutex_lock(&lock);
+            
+            // Procesamos la compra/venta
+            switch(msg.operacion) {
+                case OP_VENDER_DEUTERIO:
+                    stock_deuterio += msg.cantidad;
+                    resp.cantidad_efectiva = msg.cantidad;
+                    resp.precio_total = msg.cantidad * 10;
+                    creditos -= resp.precio_total;
+                    printf("[Transacción] Nave %d VENDIÓ %d Deuterio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    break;
+
+                case OP_VENDER_MUTEXIO:
+                    stock_mutexio += msg.cantidad;
+                    resp.cantidad_efectiva = msg.cantidad;
+                    resp.precio_total = msg.cantidad * 12;
+                    creditos -= resp.precio_total;
+                    printf("[Transacción] Nave %d VENDIÓ %d Mutexio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    break;
+
+                case OP_VENDER_SEMAFORITA:
+                    stock_semaforita += msg.cantidad;
+                    resp.cantidad_efectiva = msg.cantidad;
+                    resp.precio_total = msg.cantidad * 15;
+                    creditos -= resp.precio_total;
+                    printf("[Transacción] Nave %d VENDIÓ %d Semaforita. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    break;
+
+                case OP_VENDER_KERNELIO:
+                    stock_kernelio += msg.cantidad;
+                    resp.cantidad_efectiva = msg.cantidad;
+                    resp.precio_total = msg.cantidad * 20;
+                    creditos -= resp.precio_total;
+                    printf("[Transacción] Nave %d VENDIÓ %d Kernelio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    break;
+                    
+                case OP_COMPRAR_COMBUSTIBLE:
+                    if (combustible >= msg.cantidad) {
+                        combustible -= msg.cantidad;
+                        resp.cantidad_efectiva = msg.cantidad;
+                        resp.precio_total = msg.cantidad * 25;
+                        creditos += resp.precio_total;
+                        printf("[Transacción] Nave %d COMPRÓ %d Combustible por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    } else {
+                        resp.error = 1; // Sin stock
+                        printf("[Alerta] Nave %d intentó comprar %d Combustible (Sin stock).\n", msg.pid_nave, msg.cantidad);
+                    }
+                    break;
+                    
+                case OP_COMPRAR_OXIGENO:
+                    if (oxigeno >= msg.cantidad) {
+                        oxigeno -= msg.cantidad;
+                        resp.cantidad_efectiva = msg.cantidad;
+                        resp.precio_total = msg.cantidad * 5;
+                        creditos += resp.precio_total;
+                        printf("[Transacción] Nave %d COMPRÓ %d Oxígeno por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                    } else {
+                        resp.error = 1; // Sin stock
+                        printf("[Alerta] Nave %d intentó comprar %d Oxígeno (Sin stock).\n", msg.pid_nave, msg.cantidad);
+                    }
+                    break;
+            }
+            
+            printf(" -> Caja actual: %d créditos | Oxígeno rest: %d\n", creditos, oxigeno);
+
+            // Liberamos el inventario
+            pthread_mutex_unlock(&lock);
+            
+            // ENVIAMOS LA RESPUESTA A LA NAVE
+            char nombre_cola_resp[MQ_NAVE_NAME_LEN];
+            snprintf(nombre_cola_resp, sizeof(nombre_cola_resp), MQ_NAVE_FMT, msg.pid_nave);
+            
+            mqd_t mq_resp = mq_open(nombre_cola_resp, O_WRONLY);
+            if (mq_resp != (mqd_t)-1) {
+                mq_send(mq_resp, (const char*)&resp, sizeof(resp), 0);
+                mq_close(mq_resp);
+            } else {
+                printf("[Error] No se pudo abrir la cola de respuesta de la nave %d\n", msg.pid_nave);
+            }
+        }
+    }
+    return NULL;
+}
+
+
 void* gasto_combustible(void* arg){
+    (void)arg;  /* el hilo no usa argumentos */
     while(1){
-        usleep(1000000);// rapidito para probar
-        /* sleep(DEFAULT_INTERVALO_COMBUSTIBLE); */
+        /* Respetar el intervalo configurado en config.txt. */
+        sleep((unsigned int)intervalo_combustible_seg);
         
         int lugares_libres;
         sem_getvalue(semaforo_hangar, &lugares_libres);
@@ -31,8 +221,6 @@ void* gasto_combustible(void* arg){
         if(lugares_libres < 0){
             lugares_libres = 0; //pongo en 0 para que no sea negativo
         }
-        
-        int naver_adentro = 3 - lugares_libres;
 
         //bloqueamos antes de tocar la variable compartida
         pthread_mutex_lock(&lock);
@@ -43,38 +231,70 @@ void* gasto_combustible(void* arg){
         //evaluamos si nos quedamos en cero para apagar todo
         if(combustible <= 0){
             printf("Estacion espacial sin combustible... Desactivando\n");
+            /* Reflejar la desactivacion en la SHM para el radar (task #30). */
+            if (mapa_shm != NULL && mi_id_estacion >= 0) {
+                pthread_mutex_lock(&mapa_shm->mutex);
+                mapa_shm->estaciones[mi_id_estacion].combustible = 0;
+                mapa_shm->estaciones[mi_id_estacion].estado = ESTADO_DESACTIVADO;
+                pthread_mutex_unlock(&mapa_shm->mutex);
+            }
             pthread_mutex_unlock(&lock);
             break; //rompe el while para ir al exit
+        }
+
+        /* Reflejar el combustible (deuterio) actual en la SHM para que el
+         * radar de las naves lo muestre al lado de la estacion (task #30). */
+        if (mapa_shm != NULL && mi_id_estacion >= 0) {
+            pthread_mutex_lock(&mapa_shm->mutex);
+            mapa_shm->estaciones[mi_id_estacion].combustible = combustible;
+            pthread_mutex_unlock(&mapa_shm->mutex);
         }
         
         //evaluamos si pasamos el umbral de alerta
         if(combustible <= DEFAULT_UMBRAL_COMBUSTIBLE ){
             printf("¡ME ESTOY QUEDANDO SIN COMBUSTIBLE!!!!!\n");
-            
-            mqd_t cola;
-            char buff[256];
-            int prio = 0;
 
-            sprintf(buff, "SOS_DEUTERIO");
+            /*
+             * Aviso de deuterio a las naves del cuadrante (task #26 -> #30).
+             * Usamos el protocolo de ipc.h: leemos los PIDs de las naves
+             * registradas desde la SHM y enviamos un MsgAlertaCombustible a
+             * la cola privada de cada nave (/cosmikernel_nave_<pid>).
+             */
+            if (mapa_shm != NULL) {
+                int pids[MAX_NAVES];
+                int n = 0;
 
-            int cant_naves = 3;
-            int ids_naves[] = {1, 2, 3};
-
-            for(int i=0 ; i<cant_naves ; i++){
-                char nombre_cola_nave[50];
-                sprintf(nombre_cola_nave, "/cola_nave_%d", ids_naves[i]);
-
-                mqd_t cola_nave = mq_open(nombre_cola_nave, O_WRONLY);
-                
-                if (cola_nave != (mqd_t)-1) {
-                    if (mq_send(cola_nave, buff, strlen(buff) + 1, prio) == -1) {
-                        perror("Error al enviar S.O.S a una nave");
-                    } else {
-                        printf("-> S.O.S enviado a la nave %d por %s\n", ids_naves[i], nombre_cola_nave);
+                /* Copiamos los PIDs de naves activas bajo el mutex del mapa
+                 * (seccion critica corta: solo copiar, no enviar). */
+                pthread_mutex_lock(&mapa_shm->mutex);
+                for (int i = 0; i < MAX_NAVES; i++) {
+                    if (mapa_shm->naves[i].pid != 0 &&
+                        mapa_shm->naves[i].estado == ESTADO_ACTIVO) {
+                        pids[n] = mapa_shm->naves[i].pid;
+                        n++;
                     }
-                    mq_close(cola_nave);
-                } else {
-                    printf("Aviso: La nave %d no tiene su cola abierta aún.\n", ids_naves[i]);
+                }
+                pthread_mutex_unlock(&mapa_shm->mutex);
+
+                MsgAlertaCombustible alerta;
+                alerta.id_estacion = mi_id_estacion;
+                alerta.pid_estacion = getpid();
+                alerta.combustible_actual = combustible;
+
+                for (int i = 0; i < n; i++) {
+                    char nombre_cola_nave[MQ_NAVE_NAME_LEN];
+                    snprintf(nombre_cola_nave, sizeof(nombre_cola_nave),
+                             MQ_NAVE_FMT, pids[i]);
+
+                    mqd_t cola_nave = mq_open(nombre_cola_nave, O_WRONLY);
+                    if (cola_nave != (mqd_t)-1) {
+                        if (mq_send(cola_nave, (const char *)&alerta,
+                                    sizeof(alerta), 0) == -1)
+                            perror("Error al enviar S.O.S a una nave");
+                        else
+                            printf("-> S.O.S (deuterio) enviado a nave pid %d\n", pids[i]);
+                        mq_close(cola_nave);
+                    }
                 }
             }
         }
@@ -87,6 +307,12 @@ void* gasto_combustible(void* arg){
 }
 
 int main(){
+    /* Cargar config.txt para respetar el intervalo de consumo de combustible. */
+    Config cfg;
+    if (config_load(CONFIG_PATH, &cfg) == -1)
+        fprintf(stderr, "estacion: arrancando con valores por defecto\n");
+    intervalo_combustible_seg = cfg.intervalo_combustible_estacion;
+
     //inicializamos el mutex antes de arrancar cualquier hilo
     if (pthread_mutex_init(&lock, NULL) != 0) {
         perror("Error al inicializar el mutex");
@@ -100,6 +326,58 @@ int main(){
     }
     printf("Hangar inicializado con 3 espacios disponibles.\n");
 
+    /* Abrir la SHM del mapa (creada por el servidor) */
+    int fd_shm = shm_open(SHM_MAPA_NAME, O_RDWR, 0666);
+    if (fd_shm != -1) {
+        mapa_shm = mmap(NULL, sizeof(Mapa), PROT_READ | PROT_WRITE, MAP_SHARED, fd_shm, 0);
+        close(fd_shm);
+        if (mapa_shm == MAP_FAILED) {
+            mapa_shm = NULL;
+            fprintf(stderr, "estacion: no se pudo mapear la SHM\n");
+        }
+    } else {
+        fprintf(stderr, "estacion: SHM no encontrada (servidor no corriendo)\n");
+    }
+
+    /* Registrarse con el servidor: nos asigna un slot y posicion en el mapa,
+     * y marca la celda como CELDA_ESTACION (asi aparece la 'E' en el radar). */
+    if (mapa_shm != NULL) {
+        int est_fila = -1, est_col = -1;
+        mi_id_estacion = registrar_estacion(&est_fila, &est_col);
+        if (mi_id_estacion < 0) {
+            fprintf(stderr, "estacion: no se pudo registrar contra el servidor\n");
+        } else {
+            /* Inicializamos nuestro combustible (deuterio) en la SHM. */
+            pthread_mutex_lock(&mapa_shm->mutex);
+            mapa_shm->estaciones[mi_id_estacion].combustible = combustible;
+            pthread_mutex_unlock(&mapa_shm->mutex);
+            printf("Estacion registrada con id %d en (%d,%d)\n",
+                   mi_id_estacion, est_fila, est_col);
+
+            // --- INICIO APERTURA COLA DE TRANSACCIONES ---
+            struct mq_attr attr_trx;
+            attr_trx.mq_flags = 0; 
+            attr_trx.mq_maxmsg = 10;
+            attr_trx.mq_msgsize = sizeof(MsgTransaccion); 
+            attr_trx.mq_curmsgs = 0;
+            
+            // Armamos el nombre usando el formato definido en ipc.h
+            snprintf(nombre_mq_transacciones, sizeof(nombre_mq_transacciones), MQ_ESTACION_FMT, mi_id_estacion);
+            mq_transacciones = mq_open(nombre_mq_transacciones, O_CREAT | O_RDONLY, 0666, &attr_trx);
+            
+            if (mq_transacciones == (mqd_t)-1) {
+                perror("Error al crear la cola de transacciones");
+            } else {
+                // Si la cola se abrió bien, lanzamos el hilo del cajero
+                pthread_t hilo_trx;
+                if (pthread_create(&hilo_trx, NULL, atender_transacciones, NULL) != 0) {
+                    perror("Error al crear el hilo de transacciones");
+                }
+            }
+            // ---FIN APERTURA COLA DE TRANSACCIONES ---
+        }
+    }
+
     pthread_t estacion1;
     
     //crea el hilo
@@ -112,6 +390,8 @@ int main(){
     pthread_join(estacion1, NULL);
 
     //limpiamos la memoria del mutex antes de apagar el programa
+    mq_close(mq_transacciones);
+    mq_unlink(nombre_mq_transacciones);
     sem_close(semaforo_hangar);
     sem_unlink(nombre_semaforo); //borra el semaforo del SO
     pthread_mutex_destroy(&lock);
