@@ -47,9 +47,6 @@
 /* Bandera de salida (se setea desde el handler de SIGINT). */
 static volatile sig_atomic_t g_salir = 0;
 
-/* Bandera que indica que el servidor envio SIGUSR1 (desconexion). */
-static volatile sig_atomic_t g_servidor_desconectado = 0;
-
 /* Argumentos pasados al hilo radar. */
 typedef struct
 {
@@ -82,21 +79,19 @@ static const int dc[4] = {0, 1, 0, -1};
  * Lo escribe el hilo de alertas y lo lee el hilo radar para mostrarlo.
  * Como es estado LOCAL del proceso (no de la SHM), usa su propio mutex.
  */
-typedef struct
-{
+typedef struct {
     pthread_mutex_t mutex;
-    int hay_alerta;  /* 0 hasta recibir la primera */
-    int id_estacion; /* -1 si la estacion no esta registrada */
+    int hay_alerta;     /* 0 hasta recibir la primera */
+    int id_estacion;    /* -1 si la estacion no esta registrada */
     int pid_estacion;
-    int combustible; /* combustible reportado por la estacion */
-    int total;       /* cantidad total de alertas recibidas */
+    int combustible;    /* combustible reportado por la estacion */
+    int total;          /* cantidad total de alertas recibidas */
 } EstadoAlerta;
 
-static EstadoAlerta g_alerta; /* inicializado en main (mutex) y a cero por ser static */
+static EstadoAlerta g_alerta;  /* inicializado en main (mutex) y a cero por ser static */
 
 /* Argumentos del hilo de alertas: nombre de la cola privada de la nave. */
-typedef struct
-{
+typedef struct {
     char cola[MQ_NAVE_NAME_LEN];
 } AlertaArgs;
 
@@ -105,15 +100,6 @@ typedef struct
 static void manejar_sigint(int sig)
 {
     (void)sig;
-    g_salir = 1;
-}
-
-/* ─── Handler de SIGUSR1 (servidor se apago) ─────────────────────────── */
-
-static void manejar_sigusr1(int sig)
-{
-    (void)sig;
-    g_servidor_desconectado = 1;
     g_salir = 1;
 }
 
@@ -324,29 +310,21 @@ static void *hilo_alertas(void *arg)
 
     mq = mq_open(args->cola, O_RDONLY);
     if (mq == (mqd_t)-1)
-        return NULL; /* sin cola no hay alertas; no es fatal para la nave */
+        return NULL;  /* sin cola no hay alertas; no es fatal para la nave */
 
-    if (mq_getattr(mq, &attr) == -1)
-    {
-        mq_close(mq);
-        return NULL;
-    }
+    if (mq_getattr(mq, &attr) == -1) { mq_close(mq); return NULL; }
     buf = malloc((size_t)attr.mq_msgsize);
-    if (buf == NULL)
-    {
-        mq_close(mq);
-        return NULL;
-    }
+    if (buf == NULL) { mq_close(mq); return NULL; }
 
     while (!g_salir)
     {
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 1; /* timeout 1s para poder revisar g_salir */
+        ts.tv_sec += 1;  /* timeout 1s para poder revisar g_salir */
 
         ssize_t n = mq_timedreceive(mq, buf, (size_t)attr.mq_msgsize, NULL, &ts);
         if (n < 0)
-            continue; /* ETIMEDOUT / EINTR: reintentar */
+            continue;  /* ETIMEDOUT / EINTR: reintentar */
 
         if ((size_t)n >= sizeof(MsgAlertaCombustible))
         {
@@ -354,10 +332,10 @@ static void *hilo_alertas(void *arg)
             memcpy(&al, buf, sizeof(al));
 
             pthread_mutex_lock(&g_alerta.mutex);
-            g_alerta.hay_alerta = 1;
-            g_alerta.id_estacion = al.id_estacion;
+            g_alerta.hay_alerta   = 1;
+            g_alerta.id_estacion  = al.id_estacion;
             g_alerta.pid_estacion = al.pid_estacion;
-            g_alerta.combustible = al.combustible_actual;
+            g_alerta.combustible  = al.combustible_actual;
             g_alerta.total++;
             pthread_mutex_unlock(&g_alerta.mutex);
         }
@@ -390,12 +368,12 @@ static void *hilo_radar(void *arg)
     Mapa *mapa = args->mapa;
     int id = args->id_nave;
 
-    int barra_off_y = 2;                         /* fila de la 1ra barra (fila 1 en blanco) */
-    int mapa_off_y = barra_off_y + 2;            /* blanco + 2 barras => mapa en fila 4 */
-    int mapa_off_x = 1;                          /* borde izquierdo */
-    int alto_mapa = mapa_off_y + MAPA_FILAS + 1; /* mapa + borde inferior */
-    int ancho_mapa = MAPA_COLS + 2;
-    int alto_panel = alto_mapa; /* misma altura para alinear */
+    int barra_off_y = 2;                          /* fila de la 1ra barra (fila 1 en blanco) */
+    int mapa_off_y  = barra_off_y + 2;            /* blanco + 2 barras => mapa en fila 4 */
+    int mapa_off_x  = 1;                          /* borde izquierdo */
+    int alto_mapa   = mapa_off_y + MAPA_FILAS + 1;   /* mapa + borde inferior */
+    int ancho_mapa  = MAPA_COLS  + 2;
+    int alto_panel  = alto_mapa;                  /* misma altura para alinear */
     int ancho_panel = 28;
 
     WINDOW *win_mapa = newwin(alto_mapa, ancho_mapa, 0, 0);
@@ -408,8 +386,8 @@ static void *hilo_radar(void *arg)
 
     /* Copia local del mapa para dibujar fuera de la seccion critica. */
     Celda celdas_local[MAPA_FILAS][MAPA_COLS];
-    Nave nave_local;
-    Nave naves_local[MAX_NAVES];
+    Nave  nave_local;
+    Nave  naves_local[MAX_NAVES];
     Estacion estaciones_local[MAX_ESTACIONES];
 
     while (!g_salir)
@@ -432,21 +410,14 @@ static void *hilo_radar(void *arg)
          * barras arrancan en la misma columna (etiqueta+numero de ancho fijo).
          * El valor (0-100) se escala al ancho disponible del recuadro. */
         {
-            int prefijo_w = 17; /* longitud de "Combustible: 100 " */
+            int prefijo_w = 17;   /* longitud de "Combustible: 100 " */
             int ancho_barra = (ancho_mapa - 2) - prefijo_w;
-            if (ancho_barra < 1)
-                ancho_barra = 1;
+            if (ancho_barra < 1) ancho_barra = 1;
 
             int comb = nave_local.combustible;
-            int oxi = nave_local.oxigeno;
-            if (comb < 0)
-                comb = 0;
-            else if (comb > 100)
-                comb = 100;
-            if (oxi < 0)
-                oxi = 0;
-            else if (oxi > 100)
-                oxi = 100;
+            int oxi  = nave_local.oxigeno;
+            if (comb < 0) comb = 0; else if (comb > 100) comb = 100;
+            if (oxi  < 0) oxi  = 0; else if (oxi  > 100) oxi  = 100;
 
             mvwprintw(win_mapa, barra_off_y, 1, "Combustible: %3d ", comb);
             mvwhline(win_mapa, barra_off_y, 1 + prefijo_w, '=', comb * ancho_barra / 100);
@@ -538,7 +509,7 @@ static void *hilo_radar(void *arg)
 
         /* --- Arriba: inventario (dinero + recursos recolectados) --- */
         /* (linea 1 en blanco) */
-        mvwprintw(win_panel, 2, 1, " $0"); /* TODO: dinero (sistema de transacciones futuro) */
+        mvwprintw(win_panel, 2, 1, " $0");   /* TODO: dinero (sistema de transacciones futuro) */
         /* (linea 3 en blanco) */
         mvwprintw(win_panel, 4, 1, " Deuterio:   %d", nave_local.deuterio);
         mvwprintw(win_panel, 5, 1, " Mutexio:    %d", nave_local.mutexio);
@@ -550,11 +521,11 @@ static void *hilo_radar(void *arg)
 
         /* --- Debajo: eventos / alertas SOS (task #30) --- */
         pthread_mutex_lock(&g_alerta.mutex);
-        int al_hay = g_alerta.hay_alerta;
-        int al_id = g_alerta.id_estacion;
-        int al_pid = g_alerta.pid_estacion;
+        int al_hay  = g_alerta.hay_alerta;
+        int al_id   = g_alerta.id_estacion;
+        int al_pid  = g_alerta.pid_estacion;
         int al_comb = g_alerta.combustible;
-        int al_tot = g_alerta.total;
+        int al_tot  = g_alerta.total;
         pthread_mutex_unlock(&g_alerta.mutex);
 
         mvwprintw(win_panel, 11, 1, "Eventos / Alertas SOS");
@@ -593,20 +564,6 @@ static void *hilo_radar(void *arg)
         nanosleep(&ts, NULL);
     }
 
-    /* Si salimos por SIGUSR1 del servidor, mostrar aviso al jugador. */
-    if (g_servidor_desconectado)
-    {
-        werase(win_panel);
-        box(win_panel, 0, 0);
-        wattron(win_panel, A_BOLD);
-        mvwprintw(win_panel, alto_panel / 2 - 1, 2, "!! SERVIDOR DESCONECTADO !!");
-        mvwprintw(win_panel, alto_panel / 2 + 1, 2, "  Cerrando nave...         ");
-        wattroff(win_panel, A_BOLD);
-        wnoutrefresh(win_panel);
-        doupdate();
-        sleep(2);
-    }
-
     delwin(win_mapa);
     delwin(win_panel);
     return NULL;
@@ -619,8 +576,14 @@ static void *hilo_radar(void *arg)
  *   a / d (o flechas izq/der): giran la nave (cambian su direccion)
  *   w / s (o flechas arr/abajo): avanzan / retroceden en la direccion actual
  *
- * Para moverse a una celda toma su semaforo binario (sem_wait) de modo que
- * dos naves no puedan ocupar la misma celda, y actualiza la SHM bajo el mutex.
+ * Sincronizacion con los semaforos de celda (task #29). Invariante: la nave
+ * mantiene TOMADO (valor 0) el semaforo de la celda que ocupa.
+ *   - Al arrancar reserva el semaforo de su celda inicial.
+ *   - Al moverse: sem_trywait del semaforo de la celda DESTINO; si lo logra,
+ *     actualiza la SHM (bajo el mutex) y hace sem_post del semaforo de la celda
+ *     ORIGEN. El de la celda destino queda tomado. Usar sem_trywait (no
+ *     sem_wait) evita deadlock cuando dos naves intentan intercambiar celdas.
+ *   - Al salir libera el semaforo de la celda que ocupa.
  * Cada movimiento gasta 1 de combustible; si llega a 0, la nave se desactiva.
  */
 static void *hilo_propulsion(void *arg)
@@ -629,6 +592,21 @@ static void *hilo_propulsion(void *arg)
     Mapa *mapa = args->mapa;
     int id = args->id_nave;
     int ch;
+
+    /* Reservar el semaforo de la celda inicial (mantener el invariante). */
+    {
+        int fi, ci;
+        pthread_mutex_lock(&mapa->mutex);
+        fi = mapa->naves[id].fila;
+        ci = mapa->naves[id].col;
+        pthread_mutex_unlock(&mapa->mutex);
+        sem_t *sem_ini = semaforo_celda_abrir(fi, ci);
+        if (sem_ini != NULL)
+        {
+            sem_trywait(sem_ini); /* reserva la celda inicial si estaba libre */
+            semaforo_celda_cerrar(sem_ini);
+        }
+    }
 
     while (!g_salir)
     {
@@ -676,41 +654,58 @@ static void *hilo_propulsion(void *arg)
         {
             int fila_actual = mapa->naves[id].fila;
             int col_actual = mapa->naves[id].col;
-
             int nueva_fila = fila_actual + df_mov;
             int nueva_col = col_actual + dc_mov;
 
-            if (mapa->naves[id].combustible > 0)
+            int dentro = (nueva_fila >= 0 && nueva_fila < MAPA_FILAS &&
+                          nueva_col >= 0 && nueva_col < MAPA_COLS);
+
+            if (dentro && mapa->naves[id].combustible > 0)
             {
-                /* Tomamos el semaforo de la celda destino (task #29). Si la
-                 * celda esta fuera del mapa, semaforo_celda_abrir devuelve NULL
-                 * (no existe ese semaforo) y la nave no se mueve. */
-                sem_t *semaforo_celda = semaforo_celda_abrir(nueva_fila, nueva_col);
-
-                if (semaforo_celda != NULL)
+                sem_t *sem_destino = semaforo_celda_abrir(nueva_fila, nueva_col);
+                if (sem_destino != NULL)
                 {
-                    sem_wait(semaforo_celda);
+                    /* sem_trywait: si la celda destino esta ocupada por otra
+                     * nave, no nos movemos (no bloquea -> sin deadlock). */
+                    if (sem_trywait(sem_destino) == 0)
+                    {
+                        int movido = 0;
+                        pthread_mutex_lock(&mapa->mutex);
+                        /* Defensa: solo nos movemos si la celda sigue vacia. */
+                        if (mapa->celdas[nueva_fila][nueva_col].tipo == CELDA_VACIA)
+                        {
+                            mapa->naves[id].fila = nueva_fila;
+                            mapa->naves[id].col = nueva_col;
+                            mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
+                            mapa->celdas[nueva_fila][nueva_col].idx = id;
+                            mapa->celdas[fila_actual][col_actual].tipo = CELDA_VACIA;
+                            mapa->celdas[fila_actual][col_actual].idx = -1;
+                            mapa->naves[id].combustible--;
+                            if (mapa->naves[id].combustible == 0)
+                                mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                            movido = 1;
+                        }
+                        pthread_mutex_unlock(&mapa->mutex);
 
-                    pthread_mutex_lock(&mapa->mutex);
-
-                    mapa->naves[id].fila = nueva_fila;
-                    mapa->naves[id].col = nueva_col;
-
-                    mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
-                    mapa->celdas[nueva_fila][nueva_col].idx = id;
-
-                    mapa->celdas[fila_actual][col_actual].tipo = CELDA_VACIA;
-                    mapa->celdas[fila_actual][col_actual].idx = -1;
-
-                    mapa->naves[id].combustible--;
-                    if (mapa->naves[id].combustible == 0)
-                        mapa->naves[id].estado = ESTADO_DESACTIVADO;
-
-                    pthread_mutex_unlock(&mapa->mutex);
-
-                    /* Liberamos la celda anterior (su semaforo) y cerramos. */
-                    sem_post(semaforo_celda);
-                    semaforo_celda_cerrar(semaforo_celda);
+                        if (movido)
+                        {
+                            /* Liberamos el semaforo de la celda ORIGEN (la que
+                             * abandonamos). El de la celda DESTINO queda tomado:
+                             * la nave ahora ocupa esa celda. */
+                            sem_t *sem_origen = semaforo_celda_abrir(fila_actual, col_actual);
+                            if (sem_origen != NULL)
+                            {
+                                sem_post(sem_origen);
+                                semaforo_celda_cerrar(sem_origen);
+                            }
+                        }
+                        else
+                        {
+                            /* No nos movimos: devolvemos el semaforo destino. */
+                            sem_post(sem_destino);
+                        }
+                    }
+                    semaforo_celda_cerrar(sem_destino);
                 }
             }
         }
@@ -718,6 +713,21 @@ static void *hilo_propulsion(void *arg)
         /* Poll cada 16ms (~60 Hz) para no quemar CPU. */
         struct timespec ts = {.tv_sec = 0, .tv_nsec = 16000000L};
         nanosleep(&ts, NULL);
+    }
+
+    /* Al salir, liberar el semaforo de la celda que ocupa la nave. */
+    {
+        int ff, cf;
+        pthread_mutex_lock(&mapa->mutex);
+        ff = mapa->naves[id].fila;
+        cf = mapa->naves[id].col;
+        pthread_mutex_unlock(&mapa->mutex);
+        sem_t *sem_fin = semaforo_celda_abrir(ff, cf);
+        if (sem_fin != NULL)
+        {
+            sem_post(sem_fin);
+            semaforo_celda_cerrar(sem_fin);
+        }
     }
 
     return NULL;
@@ -750,13 +760,6 @@ int main(int argc, char *argv[])
     sa.sa_flags = 0; /* sin SA_RESTART: queremos cortar nanosleep/sleep */
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
-
-    /* Handler SIGUSR1: el servidor nos avisa que se esta apagando. */
-    memset(&sa, 0, sizeof(sa));
-    sa.sa_handler = manejar_sigusr1;
-    sigemptyset(&sa.sa_mask);
-    sa.sa_flags = 0;
-    sigaction(SIGUSR1, &sa, NULL);
 
     /* 3) SHM del mapa (creada por el servidor; sin servidor abortamos). */
     mapa = abrir_shm_mapa();
