@@ -1341,12 +1341,14 @@ static void *hilo_propulsion(void *arg)
                     dc_mov = dc[mapa->naves[id].direccion];
                     mover = 1;
                 }
+#ifdef BUTTON5_PRESSED
                 else if (ev.bstate & BUTTON5_PRESSED)
                 {
                     df_mov = -df[mapa->naves[id].direccion];
                     dc_mov = -dc[mapa->naves[id].direccion];
                     mover = 1;
                 }
+#endif
             }
             break;
         }
@@ -1694,8 +1696,16 @@ int main(int argc, char *argv[])
     noecho();
     curs_set(0); /* ocultar cursor */
     keypad(stdscr, TRUE);
-    /* Rueda del mouse para avanzar/retroceder (BUTTON4=arriba, BUTTON5=abajo). */
-    mousemask(BUTTON4_PRESSED | BUTTON5_PRESSED, NULL);
+    /* Rueda del mouse para avanzar/retroceder. BUTTON4 = rueda arriba (siempre
+     * disponible). BUTTON5 = rueda abajo: solo existe en ncurses con
+     * NCURSES_MOUSE_VERSION >= 2 (ncurses 6). En ncurses viejo (5.x, p.ej.
+     * CentOS/RHEL) no esta definido, asi que lo sumamos al mask solo si existe;
+     * si no, se retrocede con 's' o la flecha abajo. */
+    mmask_t mascara_rueda = BUTTON4_PRESSED;
+#ifdef BUTTON5_PRESSED
+    mascara_rueda |= BUTTON5_PRESSED;
+#endif
+    mousemask(mascara_rueda, NULL);
     mouseinterval(0); /* sin demora: respuesta inmediata de la rueda */
     nodelay(stdscr, TRUE); /* getch() no bloquea (lo usa el hilo de propulsion) */
     refresh();
