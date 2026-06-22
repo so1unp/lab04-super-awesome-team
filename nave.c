@@ -104,6 +104,9 @@ static volatile sig_atomic_t g_extraer = 0;
 /* Combustible que gasta la nave en cada extraccion. */
 #define EXTRACCION_COSTO_COMBUSTIBLE 5
 
+/* La nave consume 1 de combustible cada N movimientos (no en cada paso). */
+#define MOVIMIENTOS_POR_COMBUSTIBLE 10
+
 /*
  * Estado de la ultima alerta de combustible recibida (task #30).
  * Lo escribe el hilo de alertas y lo lee el hilo radar para mostrarlo.
@@ -1068,7 +1071,8 @@ static void enviar_transaccion(Mapa *mapa, int id_nave, int id_estacion,
  *     ORIGEN. El de la celda destino queda tomado. Usar sem_trywait (no
  *     sem_wait) evita deadlock cuando dos naves intentan intercambiar celdas.
  *   - Al salir libera el semaforo de la celda que ocupa.
- * Cada movimiento gasta 1 de combustible; si llega a 0, la nave se desactiva.
+ * Cada MOVIMIENTOS_POR_COMBUSTIBLE movimientos gasta 1 de combustible; si llega
+ * a 0, la nave se desactiva.
  */
 static void *hilo_propulsion(void *arg)
 {
@@ -1076,6 +1080,7 @@ static void *hilo_propulsion(void *arg)
     Mapa *mapa = args->mapa;
     int id = args->id_nave;
     int ch;
+    int pasos = 0; /* movimientos acumulados desde el ultimo consumo de combustible */
 
     /* Reservar el semaforo de la celda inicial (mantener el invariante). */
     {
@@ -1311,11 +1316,18 @@ static void *hilo_propulsion(void *arg)
                                 mapa->celdas[nueva_fila][nueva_col].idx = id;
                                 mapa->celdas[fila_actual][col_actual].tipo = CELDA_VACIA;
                                 mapa->celdas[fila_actual][col_actual].idx = -1;
-                                mapa->naves[id].combustible--;
-                                if (mapa->naves[id].combustible == 0)
+
+                                /* Consumir 1 de combustible cada N movimientos. */
+                                pasos++;
+                                if (pasos >= MOVIMIENTOS_POR_COMBUSTIBLE)
                                 {
-                                    mapa->naves[id].estado = ESTADO_DESACTIVADO;
-                                    murio_comb = 1;
+                                    pasos = 0;
+                                    mapa->naves[id].combustible--;
+                                    if (mapa->naves[id].combustible == 0)
+                                    {
+                                        mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                                        murio_comb = 1;
+                                    }
                                 }
                                 movido = 1;
                             }
