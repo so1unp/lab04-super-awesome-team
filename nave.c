@@ -52,6 +52,10 @@
 /* Bandera de salida (se setea desde el handler de SIGINT). */
 static volatile sig_atomic_t g_salir = 0;
 
+/* Bandera de game over y motivo (sin combustible / sin oxigeno). */
+static volatile sig_atomic_t g_game_over = 0;
+static char g_game_over_motivo[64] = {0};
+
 /* Argumentos pasados al hilo radar. */
 typedef struct
 {
@@ -102,33 +106,36 @@ static volatile sig_atomic_t g_extraer = 0;
  * Lo escribe el hilo de alertas y lo lee el hilo radar para mostrarlo.
  * Como es estado LOCAL del proceso (no de la SHM), usa su propio mutex.
  */
-typedef struct {
+typedef struct
+{
     pthread_mutex_t mutex;
-    int hay_alerta;     /* 0 hasta recibir la primera */
-    int id_estacion;    /* -1 si la estacion no esta registrada */
+    int hay_alerta;  /* 0 hasta recibir la primera */
+    int id_estacion; /* -1 si la estacion no esta registrada */
     int pid_estacion;
-    int combustible;    /* combustible reportado por la estacion */
-    int total;          /* cantidad total de alertas recibidas */
+    int combustible; /* combustible reportado por la estacion */
+    int total;       /* cantidad total de alertas recibidas */
 } EstadoAlerta;
 
-static EstadoAlerta g_alerta;  /* inicializado en main (mutex) y a cero por ser static */
+static EstadoAlerta g_alerta; /* inicializado en main (mutex) y a cero por ser static */
 
 /*
  * Estado del hangar en que se encuentra la nave actualmente (task #44).
  * El hilo de propulsion lo escribe; el hilo radar lo lee para mostrarlo.
  * Como es estado LOCAL del proceso, usa su propio mutex.
  */
-typedef struct {
+typedef struct
+{
     pthread_mutex_t mutex;
-    int id_estacion;   /* -1 = fuera del hangar */
-    sem_t *sem;        /* handle del semaforo del hangar abierto, NULL si no esta */
-    char msg[64];      /* ultimo mensaje de evento del hangar */
+    int id_estacion; /* -1 = fuera del hangar */
+    sem_t *sem;      /* handle del semaforo del hangar abierto, NULL si no esta */
+    char msg[64];    /* ultimo mensaje de evento del hangar */
 } EstadoHangar;
 
 static EstadoHangar g_hangar;
 
 /* Argumentos del hilo de alertas: nombre de la cola privada de la nave. */
-typedef struct {
+typedef struct
+{
     char cola[MQ_NAVE_NAME_LEN];
 } AlertaArgs;
 
@@ -305,7 +312,16 @@ static void *hilo_soporte_vital(void *arg)
 
         /* Avisar al servidor para que marque la celda como nave muerta ('X'). */
         if (murio)
+        {
+            if (!g_game_over)
+            {
+                snprintf(g_game_over_motivo, sizeof(g_game_over_motivo),
+                         "Sin oxigeno");
+                g_game_over = 1;
+            }
             notificar_op_servidor(REG_OP_DESACTIVAR, id);
+            g_salir = 1;
+        }
     }
     return NULL;
 }
@@ -358,21 +374,29 @@ static void *hilo_alertas(void *arg)
 
     mq = mq_open(args->cola, O_RDONLY);
     if (mq == (mqd_t)-1)
-        return NULL;  /* sin cola no hay alertas; no es fatal para la nave */
+        return NULL; /* sin cola no hay alertas; no es fatal para la nave */
 
-    if (mq_getattr(mq, &attr) == -1) { mq_close(mq); return NULL; }
+    if (mq_getattr(mq, &attr) == -1)
+    {
+        mq_close(mq);
+        return NULL;
+    }
     buf = malloc((size_t)attr.mq_msgsize);
-    if (buf == NULL) { mq_close(mq); return NULL; }
+    if (buf == NULL)
+    {
+        mq_close(mq);
+        return NULL;
+    }
 
     while (!g_salir)
     {
         struct timespec ts;
         clock_gettime(CLOCK_REALTIME, &ts);
-        ts.tv_sec += 1;  /* timeout 1s para poder revisar g_salir */
+        ts.tv_sec += 1; /* timeout 1s para poder revisar g_salir */
 
         ssize_t n = mq_timedreceive(mq, buf, (size_t)attr.mq_msgsize, NULL, &ts);
         if (n < 0)
-            continue;  /* ETIMEDOUT / EINTR: reintentar */
+            continue; /* ETIMEDOUT / EINTR: reintentar */
 
         if ((size_t)n >= sizeof(MsgAlertaCombustible))
         {
@@ -380,10 +404,10 @@ static void *hilo_alertas(void *arg)
             memcpy(&al, buf, sizeof(al));
 
             pthread_mutex_lock(&g_alerta.mutex);
-            g_alerta.hay_alerta   = 1;
-            g_alerta.id_estacion  = al.id_estacion;
+            g_alerta.hay_alerta = 1;
+            g_alerta.id_estacion = al.id_estacion;
             g_alerta.pid_estacion = al.pid_estacion;
-            g_alerta.combustible  = al.combustible_actual;
+            g_alerta.combustible = al.combustible_actual;
             g_alerta.total++;
             pthread_mutex_unlock(&g_alerta.mutex);
         }
@@ -416,12 +440,12 @@ static void *hilo_radar(void *arg)
     Mapa *mapa = args->mapa;
     int id = args->id_nave;
 
-    int barra_off_y = 2;                          /* fila de la 1ra barra (fila 1 en blanco) */
-    int mapa_off_y  = barra_off_y + 2;            /* blanco + 2 barras => mapa en fila 4 */
-    int mapa_off_x  = 1;                          /* borde izquierdo */
-    int alto_mapa   = mapa_off_y + MAPA_FILAS + 1;   /* mapa + borde inferior */
-    int ancho_mapa  = MAPA_COLS  + 2;
-    int alto_panel  = alto_mapa;                  /* misma altura para alinear */
+    int barra_off_y = 2;                         /* fila de la 1ra barra (fila 1 en blanco) */
+    int mapa_off_y = barra_off_y + 2;            /* blanco + 2 barras => mapa en fila 4 */
+    int mapa_off_x = 1;                          /* borde izquierdo */
+    int alto_mapa = mapa_off_y + MAPA_FILAS + 1; /* mapa + borde inferior */
+    int ancho_mapa = MAPA_COLS + 2;
+    int alto_panel = alto_mapa; /* misma altura para alinear */
     int ancho_panel = 28;
 
     WINDOW *win_mapa = newwin(alto_mapa, ancho_mapa, 0, 0);
@@ -449,8 +473,8 @@ static void *hilo_radar(void *arg)
 
     /* Copia local del mapa para dibujar fuera de la seccion critica. */
     Celda celdas_local[MAPA_FILAS][MAPA_COLS];
-    Nave  nave_local;
-    Nave  naves_local[MAX_NAVES];
+    Nave nave_local;
+    Nave naves_local[MAX_NAVES];
     Estacion estaciones_local[MAX_ESTACIONES];
 
     while (!g_salir)
@@ -473,14 +497,21 @@ static void *hilo_radar(void *arg)
          * barras arrancan en la misma columna (etiqueta+numero de ancho fijo).
          * El valor (0-100) se escala al ancho disponible del recuadro. */
         {
-            int prefijo_w = 17;   /* longitud de "Combustible: 100 " */
+            int prefijo_w = 17; /* longitud de "Combustible: 100 " */
             int ancho_barra = (ancho_mapa - 2) - prefijo_w;
-            if (ancho_barra < 1) ancho_barra = 1;
+            if (ancho_barra < 1)
+                ancho_barra = 1;
 
             int comb = nave_local.combustible;
-            int oxi  = nave_local.oxigeno;
-            if (comb < 0) comb = 0; else if (comb > 100) comb = 100;
-            if (oxi  < 0) oxi  = 0; else if (oxi  > 100) oxi  = 100;
+            int oxi = nave_local.oxigeno;
+            if (comb < 0)
+                comb = 0;
+            else if (comb > 100)
+                comb = 100;
+            if (oxi < 0)
+                oxi = 0;
+            else if (oxi > 100)
+                oxi = 100;
 
             mvwprintw(win_mapa, barra_off_y, 1, "Combustible: %3d ", comb);
             mvwhline(win_mapa, barra_off_y, 1 + prefijo_w, '=', comb * ancho_barra / 100);
@@ -533,7 +564,7 @@ static void *hilo_radar(void *arg)
 
         /* --- Arriba: inventario (dinero + recursos recolectados) --- */
         /* (linea 1 en blanco) */
-        mvwprintw(win_panel, 2, 1, " $%-12d", nave_local.dinero);   /* creditos de la nave (#44) */
+        mvwprintw(win_panel, 2, 1, " $%-12d", nave_local.dinero); /* creditos de la nave (#44) */
         /* (linea 3 en blanco) */
         mvwprintw(win_panel, 4, 1, " Deuterio:   %d", nave_local.deuterio);
         mvwprintw(win_panel, 5, 1, " Mutexio:    %d", nave_local.mutexio);
@@ -582,11 +613,11 @@ static void *hilo_radar(void *arg)
             else
             {
                 pthread_mutex_lock(&g_alerta.mutex);
-                int al_hay  = g_alerta.hay_alerta;
-                int al_id   = g_alerta.id_estacion;
-                int al_pid  = g_alerta.pid_estacion;
+                int al_hay = g_alerta.hay_alerta;
+                int al_id = g_alerta.id_estacion;
+                int al_pid = g_alerta.pid_estacion;
                 int al_comb = g_alerta.combustible;
-                int al_tot  = g_alerta.total;
+                int al_tot = g_alerta.total;
                 pthread_mutex_unlock(&g_alerta.mutex);
 
                 mvwprintw(win_panel, 11, 1, "Eventos / Alertas SOS");
@@ -703,9 +734,9 @@ static void notificar_op_servidor(TipoRegistroOp op, int id)
 
     MsgRegistro msg;
     memset(&msg, 0, sizeof(msg));
-    msg.op   = op;
-    msg.id   = id;
-    msg.pid  = getpid();
+    msg.op = op;
+    msg.id = id;
+    msg.pid = getpid();
     msg.tipo = CLIENTE_NAVE; /* REG_OP_DESACTIVAR lo exige; las otras ops lo ignoran */
     mq_send(mq, (const char *)&msg, sizeof(msg), 0);
     mq_close(mq);
@@ -731,10 +762,10 @@ static void *hilo_extraccion(void *arg)
     {
         if (g_extraer)
         {
-            g_extraer = 0;             /* consumir la solicitud */
-            int idx_ast = -1;          /* asteroide a eliminar, si se vacio */
-            int idx_muerta = -1;       /* nave muerta a liberar, si se saqueo */
-            int murio_comb = 0;        /* la nave se quedo sin combustible al extraer */
+            g_extraer = 0;       /* consumir la solicitud */
+            int idx_ast = -1;    /* asteroide a eliminar, si se vacio */
+            int idx_muerta = -1; /* nave muerta a liberar, si se saqueo */
+            int murio_comb = 0;  /* la nave se quedo sin combustible al extraer */
 
             pthread_mutex_lock(&mapa->mutex);
 
@@ -752,15 +783,15 @@ static void *hilo_extraccion(void *arg)
 
                 if (tipo_dest == CELDA_ASTEROIDE && mapa->naves[id].combustible > 0)
                 {
-                    int a = idx_dest;  /* indice del asteroide */
+                    int a = idx_dest; /* indice del asteroide */
                     if (a >= 0 && a < MAX_ASTEROIDES &&
                         mapa->asteroides[a].estado == ESTADO_ACTIVO)
                     {
                         /* Extraer todo el contenido al inventario de la nave. */
-                        mapa->naves[id].deuterio   += mapa->asteroides[a].deuterio;
-                        mapa->naves[id].mutexio    += mapa->asteroides[a].mutexio;
+                        mapa->naves[id].deuterio += mapa->asteroides[a].deuterio;
+                        mapa->naves[id].mutexio += mapa->asteroides[a].mutexio;
                         mapa->naves[id].semaforita += mapa->asteroides[a].semaforita;
-                        mapa->naves[id].kernelio   += mapa->asteroides[a].kernelio;
+                        mapa->naves[id].kernelio += mapa->asteroides[a].kernelio;
 
                         mapa->asteroides[a].deuterio = 0;
                         mapa->asteroides[a].mutexio = 0;
@@ -783,18 +814,18 @@ static void *hilo_extraccion(void *arg)
                 }
                 else if (tipo_dest == CELDA_NAVE_MUERTA)
                 {
-                    int m = idx_dest;  /* indice de la nave muerta (task #42) */
+                    int m = idx_dest; /* indice de la nave muerta (task #42) */
                     if (m >= 0 && m < MAX_NAVES &&
                         mapa->naves[m].estado == ESTADO_DESACTIVADO)
                     {
                         /* Saquear: transferir recursos + combustible + oxigeno + dinero. */
                         mapa->naves[id].combustible += mapa->naves[m].combustible;
-                        mapa->naves[id].oxigeno     += mapa->naves[m].oxigeno;
-                        mapa->naves[id].deuterio    += mapa->naves[m].deuterio;
-                        mapa->naves[id].mutexio     += mapa->naves[m].mutexio;
-                        mapa->naves[id].semaforita  += mapa->naves[m].semaforita;
-                        mapa->naves[id].kernelio    += mapa->naves[m].kernelio;
-                        mapa->naves[id].dinero      += mapa->naves[m].dinero;
+                        mapa->naves[id].oxigeno += mapa->naves[m].oxigeno;
+                        mapa->naves[id].deuterio += mapa->naves[m].deuterio;
+                        mapa->naves[id].mutexio += mapa->naves[m].mutexio;
+                        mapa->naves[id].semaforita += mapa->naves[m].semaforita;
+                        mapa->naves[id].kernelio += mapa->naves[m].kernelio;
+                        mapa->naves[id].dinero += mapa->naves[m].dinero;
 
                         /* Vaciar la muerta para que no se sirva dos veces. */
                         mapa->naves[m].combustible = 0;
@@ -817,7 +848,16 @@ static void *hilo_extraccion(void *arg)
             if (idx_muerta >= 0)
                 notificar_op_servidor(REG_OP_SAQUEAR_NAVE, idx_muerta);
             if (murio_comb)
+            {
+                if (!g_game_over)
+                {
+                    snprintf(g_game_over_motivo, sizeof(g_game_over_motivo),
+                             "Sin combustible");
+                    g_game_over = 1;
+                }
                 notificar_op_servidor(REG_OP_DESACTIVAR, id);
+                g_salir = 1;
+            }
         }
 
         /* Poll cada 50ms para no quemar CPU. */
@@ -1261,7 +1301,16 @@ static void *hilo_propulsion(void *arg)
                     /* Si nos quedamos sin combustible al movernos, avisar al
                      * servidor para marcar la celda como nave muerta ('X'). */
                     if (murio_comb)
+                    {
+                        if (!g_game_over)
+                        {
+                            snprintf(g_game_over_motivo, sizeof(g_game_over_motivo),
+                                     "Sin combustible");
+                            g_game_over = 1;
+                        }
                         notificar_op_servidor(REG_OP_DESACTIVAR, id);
+                        g_salir = 1;
+                    }
                 }
             }
         }
@@ -1477,7 +1526,32 @@ int main(int argc, char *argv[])
     pthread_join(th_propulsion, NULL);
     pthread_join(th_extraccion, NULL);
 
-    /* 8) Cleanup ncurses. */
+    /* 8) Pantalla de GAME OVER si la tripulacion quedo incapacitada. */
+    if (g_game_over)
+    {
+        int go_filas, go_cols;
+        getmaxyx(stdscr, go_filas, go_cols);
+        nodelay(stdscr, FALSE); /* getch() debe bloquear hasta que el jugador lea */
+        clear();
+        box(stdscr, 0, 0);
+        wattron(stdscr, A_BOLD | A_REVERSE);
+        const char *titulo = "*** GAME OVER ***";
+        mvprintw(go_filas / 2 - 2,
+                 (go_cols - (int)strlen(titulo)) / 2,
+                 "%s", titulo);
+        wattroff(stdscr, A_BOLD | A_REVERSE);
+        mvprintw(go_filas / 2,
+                 (go_cols - (int)strlen(g_game_over_motivo)) / 2,
+                 "%s", g_game_over_motivo);
+        const char *inst = "Presiona cualquier tecla para salir";
+        mvprintw(go_filas / 2 + 2,
+                 (go_cols - (int)strlen(inst)) / 2,
+                 "%s", inst);
+        refresh();
+        getch();
+    }
+
+    /* 9) Cleanup ncurses. */
     endwin();
 
     /* 9) Cleanup IPC. La SHM la destruye el servidor, no la nave. */
