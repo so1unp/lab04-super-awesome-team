@@ -132,6 +132,9 @@ typedef struct {
     char cola[MQ_NAVE_NAME_LEN];
 } AlertaArgs;
 
+/* Notifica una operacion al servidor (definida mas abajo; la usan varios hilos). */
+static void notificar_op_servidor(TipoRegistroOp op, int id);
+
 /* ─── Handler de SIGINT ───────────────────────────────────────────────── */
 
 static void manejar_sigint(int sig)
@@ -287,14 +290,22 @@ static void *hilo_soporte_vital(void *arg)
         if (g_salir)
             break;
 
+        int murio = 0;
         pthread_mutex_lock(&mapa->mutex);
         if (mapa->naves[id].oxigeno > 0)
         {
             mapa->naves[id].oxigeno--;
             if (mapa->naves[id].oxigeno == 0)
+            {
                 mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                murio = 1;
+            }
         }
         pthread_mutex_unlock(&mapa->mutex);
+
+        /* Avisar al servidor para que marque la celda como nave muerta ('X'). */
+        if (murio)
+            notificar_op_servidor(REG_OP_DESACTIVAR, id);
     }
     return NULL;
 }
@@ -662,9 +673,10 @@ static void notificar_op_servidor(TipoRegistroOp op, int id)
 
     MsgRegistro msg;
     memset(&msg, 0, sizeof(msg));
-    msg.op  = op;
-    msg.id  = id;
-    msg.pid = getpid();
+    msg.op   = op;
+    msg.id   = id;
+    msg.pid  = getpid();
+    msg.tipo = CLIENTE_NAVE; /* REG_OP_DESACTIVAR lo exige; las otras ops lo ignoran */
     mq_send(mq, (const char *)&msg, sizeof(msg), 0);
     mq_close(mq);
 }
@@ -692,6 +704,7 @@ static void *hilo_extraccion(void *arg)
             g_extraer = 0;             /* consumir la solicitud */
             int idx_ast = -1;          /* asteroide a eliminar, si se vacio */
             int idx_muerta = -1;       /* nave muerta a liberar, si se saqueo */
+            int murio_comb = 0;        /* la nave se quedo sin combustible al extraer */
 
             pthread_mutex_lock(&mapa->mutex);
 
@@ -700,7 +713,9 @@ static void *hilo_extraccion(void *arg)
             int ef = mapa->naves[id].fila + df[dir];
             int ec = mapa->naves[id].col + dc[dir];
 
-            if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS)
+            /* Solo actuamos si la nave esta activa (desactivada = incapacitada). */
+            if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS &&
+                mapa->naves[id].estado == ESTADO_ACTIVO)
             {
                 TipoCelda tipo_dest = mapa->celdas[ef][ec].tipo;
                 int idx_dest = mapa->celdas[ef][ec].idx;
@@ -728,6 +743,7 @@ static void *hilo_extraccion(void *arg)
                         {
                             mapa->naves[id].combustible = 0;
                             mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                            murio_comb = 1;
                         }
 
                         /* El asteroide quedo vacio: lo desactivamos y avisamos. */
@@ -741,13 +757,14 @@ static void *hilo_extraccion(void *arg)
                     if (m >= 0 && m < MAX_NAVES &&
                         mapa->naves[m].estado == ESTADO_DESACTIVADO)
                     {
-                        /* Saquear: transferir recursos + combustible + oxigeno. */
+                        /* Saquear: transferir recursos + combustible + oxigeno + dinero. */
                         mapa->naves[id].combustible += mapa->naves[m].combustible;
                         mapa->naves[id].oxigeno     += mapa->naves[m].oxigeno;
                         mapa->naves[id].deuterio    += mapa->naves[m].deuterio;
                         mapa->naves[id].mutexio     += mapa->naves[m].mutexio;
                         mapa->naves[id].semaforita  += mapa->naves[m].semaforita;
                         mapa->naves[id].kernelio    += mapa->naves[m].kernelio;
+                        mapa->naves[id].dinero      += mapa->naves[m].dinero;
 
                         /* Vaciar la muerta para que no se sirva dos veces. */
                         mapa->naves[m].combustible = 0;
@@ -756,6 +773,7 @@ static void *hilo_extraccion(void *arg)
                         mapa->naves[m].mutexio = 0;
                         mapa->naves[m].semaforita = 0;
                         mapa->naves[m].kernelio = 0;
+                        mapa->naves[m].dinero = 0;
 
                         idx_muerta = m;
                     }
@@ -768,6 +786,8 @@ static void *hilo_extraccion(void *arg)
                 notificar_op_servidor(REG_OP_DESACTIVAR_ASTEROIDE, idx_ast);
             if (idx_muerta >= 0)
                 notificar_op_servidor(REG_OP_SAQUEAR_NAVE, idx_muerta);
+            if (murio_comb)
+                notificar_op_servidor(REG_OP_DESACTIVAR, id);
         }
 
         /* Poll cada 50ms para no quemar CPU. */
@@ -967,6 +987,10 @@ static void *hilo_propulsion(void *arg)
 
         ch = getch();
 
+        /* Nave desactivada (game over): queda incapacitada, ignora el teclado. */
+        if (mapa->naves[id].estado == ESTADO_DESACTIVADO)
+            ch = ERR;
+
         switch (ch)
         {
         case 'a':
@@ -1155,6 +1179,7 @@ static void *hilo_propulsion(void *arg)
                     if (en_hangar)
                         salir_hangar(mapa);
 
+                    int murio_comb = 0;
                     sem_t *sem_destino = semaforo_celda_abrir(nueva_fila, nueva_col);
                     if (sem_destino != NULL)
                     {
@@ -1175,7 +1200,10 @@ static void *hilo_propulsion(void *arg)
                                 mapa->celdas[fila_actual][col_actual].idx = -1;
                                 mapa->naves[id].combustible--;
                                 if (mapa->naves[id].combustible == 0)
+                                {
                                     mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                                    murio_comb = 1;
+                                }
                                 movido = 1;
                             }
                             pthread_mutex_unlock(&mapa->mutex);
@@ -1199,6 +1227,11 @@ static void *hilo_propulsion(void *arg)
                         }
                         semaforo_celda_cerrar(sem_destino);
                     }
+
+                    /* Si nos quedamos sin combustible al movernos, avisar al
+                     * servidor para marcar la celda como nave muerta ('X'). */
+                    if (murio_comb)
+                        notificar_op_servidor(REG_OP_DESACTIVAR, id);
                 }
             }
         }
