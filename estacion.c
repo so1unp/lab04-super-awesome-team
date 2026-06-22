@@ -9,10 +9,25 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <time.h>
+#include <signal.h>
 #include "include/estacion.h"
 #include "include/config.h"
 #include "include/ipc.h"
 #include "include/mapa.h"
+
+/* Bandera de salida: la setea el handler de SIGUSR1 (servidor apagado)
+ * o cualquier condicion interna de fin. */
+static volatile sig_atomic_t g_salir = 0;
+
+/* Bandera que indica que la salida fue por desconexion del servidor. */
+static volatile sig_atomic_t g_servidor_desconectado = 0;
+
+static void manejar_sigusr1(int sig)
+{
+    (void)sig;
+    g_servidor_desconectado = 1;
+    g_salir = 1;
+}
 
 Estacion mi_estacion;
 int combustible = ESTACION_COMBUSTIBLE_INICIAL;
@@ -112,11 +127,17 @@ void* atender_transacciones(void* arg) {
     MsgTransaccion msg;
     MsgTransaccionResp resp;
     
-    while(1) {
-        // mq_receive frena el hilo hasta que una nave manda un mensaje
-        ssize_t leidos = mq_receive(mq_transacciones, (char*)&msg, sizeof(msg), NULL);
+    while(!g_salir) {
+        /* Usamos timedreceive con timeout de 1s para poder revisar g_salir. */
+        struct timespec ts;
+        clock_gettime(CLOCK_REALTIME, &ts);
+        ts.tv_sec += 1;
+        ssize_t leidos = mq_timedreceive(mq_transacciones, (char*)&msg, sizeof(msg), NULL, &ts);
         
-        if (leidos > 0) {
+        if (leidos <= 0) {
+            /* ETIMEDOUT, EINTR u otro error transitorio: volvemos al while. */
+            continue;
+        }
             // Preparamos la respuesta por defecto
             resp.operacion = msg.operacion;
             resp.error = 0;
@@ -203,7 +224,6 @@ void* atender_transacciones(void* arg) {
             } else {
                 printf("[Error] No se pudo abrir la cola de respuesta de la nave %d\n", msg.pid_nave);
             }
-        }
     }
     return NULL;
 }
@@ -211,7 +231,7 @@ void* atender_transacciones(void* arg) {
 
 void* gasto_combustible(void* arg){
     (void)arg;  /* el hilo no usa argumentos */
-    while(1){
+    while(!g_salir){
         /* Respetar el intervalo configurado en config.txt. */
         sleep((unsigned int)intervalo_combustible_seg);
         
@@ -303,10 +323,18 @@ void* gasto_combustible(void* arg){
         pthread_mutex_unlock(&lock);
     }
     
-    exit(EXIT_SUCCESS);
+    return NULL;
 }
 
 int main(){
+    /* Registrar handler SIGUSR1: el servidor nos avisa que se apaga. */
+    struct sigaction sa;
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = manejar_sigusr1;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGUSR1, &sa, NULL);
+
     /* Cargar config.txt para respetar el intervalo de consumo de combustible. */
     Config cfg;
     if (config_load(CONFIG_PATH, &cfg) == -1)
@@ -388,6 +416,9 @@ int main(){
 
     //esperamos a que el hilo termine (esto frena al main para que no se cierre)
     pthread_join(estacion1, NULL);
+
+    if (g_servidor_desconectado)
+        printf("Servidor desconectado\n");
 
     //limpiamos la memoria del mutex antes de apagar el programa
     mq_close(mq_transacciones);

@@ -47,6 +47,9 @@
 /* Bandera de salida (se setea desde el handler de SIGINT). */
 static volatile sig_atomic_t g_salir = 0;
 
+/* Bandera que indica que el servidor envio SIGUSR1 (desconexion). */
+static volatile sig_atomic_t g_servidor_desconectado = 0;
+
 /* Argumentos pasados al hilo radar. */
 typedef struct
 {
@@ -100,6 +103,15 @@ typedef struct {
 static void manejar_sigint(int sig)
 {
     (void)sig;
+    g_salir = 1;
+}
+
+/* ─── Handler de SIGUSR1 (servidor se apago) ─────────────────────────── */
+
+static void manejar_sigusr1(int sig)
+{
+    (void)sig;
+    g_servidor_desconectado = 1;
     g_salir = 1;
 }
 
@@ -564,6 +576,20 @@ static void *hilo_radar(void *arg)
         nanosleep(&ts, NULL);
     }
 
+    /* Si salimos por SIGUSR1 del servidor, mostrar aviso al jugador. */
+    if (g_servidor_desconectado)
+    {
+        werase(win_panel);
+        box(win_panel, 0, 0);
+        wattron(win_panel, A_BOLD);
+        mvwprintw(win_panel, alto_panel / 2 - 1, 2, "!! SERVIDOR DESCONECTADO !!");
+        mvwprintw(win_panel, alto_panel / 2 + 1, 2, "  Cerrando nave...         ");
+        wattroff(win_panel, A_BOLD);
+        wnoutrefresh(win_panel);
+        doupdate();
+        sleep(2);
+    }
+
     delwin(win_mapa);
     delwin(win_panel);
     return NULL;
@@ -707,6 +733,13 @@ int main(int argc, char *argv[])
     sa.sa_flags = 0; /* sin SA_RESTART: queremos cortar nanosleep/sleep */
     sigaction(SIGINT, &sa, NULL);
     sigaction(SIGTERM, &sa, NULL);
+
+    /* Handler SIGUSR1: el servidor nos avisa que se esta apagando. */
+    memset(&sa, 0, sizeof(sa));
+    sa.sa_handler = manejar_sigusr1;
+    sigemptyset(&sa.sa_mask);
+    sa.sa_flags = 0;
+    sigaction(SIGUSR1, &sa, NULL);
 
     /* 3) SHM del mapa (creada por el servidor; sin servidor abortamos). */
     mapa = abrir_shm_mapa();
