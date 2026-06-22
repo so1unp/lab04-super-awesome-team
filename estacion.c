@@ -53,6 +53,14 @@ int intervalo_combustible_seg = DEFAULT_INTERVALO_COMBUSTIBLE;
 // declaramos el mutex global
 pthread_mutex_t lock;
 
+// Precios de transacciones (cargados desde config.txt en main)
+int precio_deuterio   = DEFAULT_PRECIO_DEUTERIO;
+int precio_mutexio    = DEFAULT_PRECIO_MUTEXIO;
+int precio_semaforita = DEFAULT_PRECIO_SEMAFORITA;
+int precio_kernelio   = DEFAULT_PRECIO_KERNELIO;
+int precio_combustible = DEFAULT_PRECIO_COMBUSTIBLE;
+int precio_oxigeno    = DEFAULT_PRECIO_OXIGENO;
+
 // --- BITÁCORA DE TRANSACCIONES ---
 static int fd_bitacora = -1;
 static pthread_mutex_t mutex_bitacora = PTHREAD_MUTEX_INITIALIZER;
@@ -196,7 +204,7 @@ void *atender_transacciones(void *arg)
         case OP_VENDER_DEUTERIO:
             stock_deuterio += msg.cantidad;
             resp.cantidad_efectiva = msg.cantidad;
-            resp.precio_total = msg.cantidad * 10;
+            resp.precio_total = msg.cantidad * precio_deuterio;
             creditos -= resp.precio_total;
             printf("[Transacción] Nave %d VENDIÓ %d Deuterio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
             registrar_bitacora(msg.pid_nave, "venta", "deuterio", msg.cantidad, resp.precio_total);
@@ -205,7 +213,7 @@ void *atender_transacciones(void *arg)
         case OP_VENDER_MUTEXIO:
             stock_mutexio += msg.cantidad;
             resp.cantidad_efectiva = msg.cantidad;
-            resp.precio_total = msg.cantidad * 12;
+            resp.precio_total = msg.cantidad * precio_mutexio;
             creditos -= resp.precio_total;
             printf("[Transacción] Nave %d VENDIÓ %d Mutexio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
             registrar_bitacora(msg.pid_nave, "venta", "mutexio", msg.cantidad, resp.precio_total);
@@ -214,7 +222,7 @@ void *atender_transacciones(void *arg)
         case OP_VENDER_SEMAFORITA:
             stock_semaforita += msg.cantidad;
             resp.cantidad_efectiva = msg.cantidad;
-            resp.precio_total = msg.cantidad * 15;
+            resp.precio_total = msg.cantidad * precio_semaforita;
             creditos -= resp.precio_total;
             printf("[Transacción] Nave %d VENDIÓ %d Semaforita. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
             registrar_bitacora(msg.pid_nave, "venta", "semaforita", msg.cantidad, resp.precio_total);
@@ -223,7 +231,7 @@ void *atender_transacciones(void *arg)
         case OP_VENDER_KERNELIO:
             stock_kernelio += msg.cantidad;
             resp.cantidad_efectiva = msg.cantidad;
-            resp.precio_total = msg.cantidad * 20;
+            resp.precio_total = msg.cantidad * precio_kernelio;
             creditos -= resp.precio_total;
             printf("[Transacción] Nave %d VENDIÓ %d Kernelio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
             registrar_bitacora(msg.pid_nave, "venta", "kernelio", msg.cantidad, resp.precio_total);
@@ -234,7 +242,7 @@ void *atender_transacciones(void *arg)
             {
                 combustible -= msg.cantidad;
                 resp.cantidad_efectiva = msg.cantidad;
-                resp.precio_total = msg.cantidad * 25;
+                resp.precio_total = msg.cantidad * precio_combustible;
                 creditos += resp.precio_total;
                 printf("[Transacción] Nave %d COMPRÓ %d Combustible por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
                 registrar_bitacora(msg.pid_nave, "compra", "combustible", msg.cantidad, resp.precio_total);
@@ -251,7 +259,7 @@ void *atender_transacciones(void *arg)
             {
                 oxigeno -= msg.cantidad;
                 resp.cantidad_efectiva = msg.cantidad;
-                resp.precio_total = msg.cantidad * 5;
+                resp.precio_total = msg.cantidad * precio_oxigeno;
                 creditos += resp.precio_total;
                 printf("[Transacción] Nave %d COMPRÓ %d Oxígeno por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
                 registrar_bitacora(msg.pid_nave, "compra", "oxigeno", msg.cantidad, resp.precio_total);
@@ -412,6 +420,12 @@ int main()
     if (config_load(CONFIG_PATH, &cfg) == -1)
         fprintf(stderr, "estacion: arrancando con valores por defecto\n");
     intervalo_combustible_seg = cfg.intervalo_combustible_estacion;
+    precio_deuterio    = cfg.precio_deuterio;
+    precio_mutexio     = cfg.precio_mutexio;
+    precio_semaforita  = cfg.precio_semaforita;
+    precio_kernelio    = cfg.precio_kernelio;
+    precio_combustible = cfg.precio_combustible;
+    precio_oxigeno     = cfg.precio_oxigeno;
 
     /* Abrir (o crear) la bitácora con O_APPEND para escrituras atómicas (README). */
     fd_bitacora = open("bitacora.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
