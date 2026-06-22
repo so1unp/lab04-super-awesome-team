@@ -3,7 +3,7 @@
 # Formato: clave = valor
 
 # Numero de estaciones espaciales en el mapa (maximo 3)
-num_estaciones = 2
+num_estaciones = 3
 
 # Numero de asteroides presentes al mismo tiempo en el mapa (maximo 20)
 num_asteroides = 20

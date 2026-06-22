@@ -9,8 +9,9 @@
  *     y los muestra en el panel.
  *   - propulsion (task #19): mueve la nave con el teclado, usando los semaforos
  *     de celda (task #29) para que dos naves no ocupen la misma celda.
- *   - extraccion (task #21): con la tecla 'e' extrae los recursos del asteroide
- *     que la nave tiene de frente (gasta combustible) y avisa al servidor.
+ *   - accion (tasks #21 y #42): con la tecla 'e' actua sobre la celda de frente:
+ *     extrae un asteroide (gasta combustible) o saquea una nave muerta (toma sus
+ *     recursos + combustible + oxigeno); avisa al servidor para liberar la celda.
  *   - hangar / transacciones (task #44): al empujar contra una estacion la nave
  *     entra a su hangar (semaforo contador) y con f/o/1-4 compra/vende.
  *
@@ -576,32 +577,50 @@ static void *hilo_radar(void *arg)
         }
         else
         {
-            pthread_mutex_lock(&g_alerta.mutex);
-            int al_hay  = g_alerta.hay_alerta;
-            int al_id   = g_alerta.id_estacion;
-            int al_pid  = g_alerta.pid_estacion;
-            int al_comb = g_alerta.combustible;
-            int al_tot  = g_alerta.total;
-            pthread_mutex_unlock(&g_alerta.mutex);
+            /* Saqueo disponible si la nave tiene una nave muerta de frente (#42). */
+            int sdir = nave_local.direccion;
+            int sf = nave_local.fila + df[sdir];
+            int sc = nave_local.col + dc[sdir];
+            int saqueo_disp = (sf >= 0 && sf < MAPA_FILAS && sc >= 0 && sc < MAPA_COLS &&
+                               celdas_local[sf][sc].tipo == CELDA_NAVE_MUERTA);
 
-            mvwprintw(win_panel, 11, 1, "Eventos / Alertas SOS");
-            /* (linea 12 en blanco entre el titulo y el contenido) */
-            if (al_hay)
+            if (saqueo_disp)
             {
                 wattron(win_panel, A_BOLD);
-                if (al_id >= 0)
-                    mvwprintw(win_panel, 13, 1, "Estacion #%d pide", al_id);
-                else
-                    mvwprintw(win_panel, 13, 1, "Estacion(pid %d)", al_pid);
-                mvwprintw(win_panel, 14, 1, "DEUTERIO! comb=%d", al_comb);
+                mvwprintw(win_panel, 11, 1, "** SAQUEO **");
+                mvwprintw(win_panel, 13, 1, "Nave muerta al frente");
                 wattroff(win_panel, A_BOLD);
-                mvwprintw(win_panel, 15, 1, "recibidas: %d", al_tot);
+                mvwprintw(win_panel, 14, 1, "Apreta 'e' p/ saquear");
             }
             else
             {
-                mvwprintw(win_panel, 13, 1, "(sin alertas)");
-                if (h_msg[0] != '\0')
-                    mvwprintw(win_panel, 14, 1, "%-24s", h_msg);
+                pthread_mutex_lock(&g_alerta.mutex);
+                int al_hay  = g_alerta.hay_alerta;
+                int al_id   = g_alerta.id_estacion;
+                int al_pid  = g_alerta.pid_estacion;
+                int al_comb = g_alerta.combustible;
+                int al_tot  = g_alerta.total;
+                pthread_mutex_unlock(&g_alerta.mutex);
+
+                mvwprintw(win_panel, 11, 1, "Eventos / Alertas SOS");
+                /* (linea 12 en blanco entre el titulo y el contenido) */
+                if (al_hay)
+                {
+                    wattron(win_panel, A_BOLD);
+                    if (al_id >= 0)
+                        mvwprintw(win_panel, 13, 1, "Estacion #%d pide", al_id);
+                    else
+                        mvwprintw(win_panel, 13, 1, "Estacion(pid %d)", al_pid);
+                    mvwprintw(win_panel, 14, 1, "DEUTERIO! comb=%d", al_comb);
+                    wattroff(win_panel, A_BOLD);
+                    mvwprintw(win_panel, 15, 1, "recibidas: %d", al_tot);
+                }
+                else
+                {
+                    mvwprintw(win_panel, 13, 1, "(sin alertas)");
+                    if (h_msg[0] != '\0')
+                        mvwprintw(win_panel, 14, 1, "%-24s", h_msg);
+                }
             }
         }
 
@@ -628,13 +647,14 @@ static void *hilo_radar(void *arg)
     return NULL;
 }
 
-/* ─── Hilo de extraccion de recursos (task #21) ───────────────────────── */
+/* ─── Hilo de extraccion / saqueo (tasks #21 y #42) ───────────────────── */
 
 /*
- * Notifica al servidor que el asteroide `idx` quedo agotado, para que lo
- * elimine del mapa (REG_OP_DESACTIVAR_ASTEROIDE). No espera respuesta.
+ * Envia al servidor una operacion sobre una entidad del mapa identificada por
+ * `id` (p.ej. eliminar un asteroide agotado o liberar la celda de una nave
+ * muerta saqueada). No espera respuesta.
  */
-static void notificar_asteroide_desactivado(int idx)
+static void notificar_op_servidor(TipoRegistroOp op, int id)
 {
     mqd_t mq = mq_open(MQ_REGISTRO_NAME, O_WRONLY);
     if (mq == (mqd_t)-1)
@@ -642,21 +662,22 @@ static void notificar_asteroide_desactivado(int idx)
 
     MsgRegistro msg;
     memset(&msg, 0, sizeof(msg));
-    msg.op  = REG_OP_DESACTIVAR_ASTEROIDE;
-    msg.id  = idx;            /* indice en mapa->asteroides[] */
+    msg.op  = op;
+    msg.id  = id;
     msg.pid = getpid();
     mq_send(mq, (const char *)&msg, sizeof(msg), 0);
     mq_close(mq);
 }
 
 /*
- * Hilo de extraccion (task #21). Se activa cuando el hilo de propulsion levanta
- * la bandera g_extraer (al presionar la tecla de accion). Extrae TODO el
- * contenido del asteroide que la nave tiene de frente (segun su direccion):
- *   - suma los 4 minerales del asteroide al inventario de la nave,
- *   - gasta combustible (EXTRACCION_COSTO_COMBUSTIBLE),
- *   - vacia y desactiva el asteroide en la SHM (bajo el mutex),
- *   - notifica al servidor para que lo elimine del mapa.
+ * Hilo de accion (tasks #21 y #42). Se activa cuando el hilo de propulsion
+ * levanta la bandera g_extraer (tecla 'e'). Actua sobre la celda que la nave
+ * tiene de frente (segun su direccion):
+ *   - ASTEROIDE: extrae todo su contenido al inventario, gasta combustible,
+ *     lo vacia/desactiva y avisa al servidor para eliminarlo (#21).
+ *   - NAVE MUERTA: saquea sus recursos + combustible + oxigeno al inventario
+ *     y avisa al servidor para liberar su celda (#42).
+ * Toda la transferencia se hace bajo el mutex del mapa.
  */
 static void *hilo_extraccion(void *arg)
 {
@@ -670,6 +691,7 @@ static void *hilo_extraccion(void *arg)
         {
             g_extraer = 0;             /* consumir la solicitud */
             int idx_ast = -1;          /* asteroide a eliminar, si se vacio */
+            int idx_muerta = -1;       /* nave muerta a liberar, si se saqueo */
 
             pthread_mutex_lock(&mapa->mutex);
 
@@ -678,43 +700,74 @@ static void *hilo_extraccion(void *arg)
             int ef = mapa->naves[id].fila + df[dir];
             int ec = mapa->naves[id].col + dc[dir];
 
-            if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS &&
-                mapa->celdas[ef][ec].tipo == CELDA_ASTEROIDE &&
-                mapa->naves[id].combustible > 0)
+            if (ef >= 0 && ef < MAPA_FILAS && ec >= 0 && ec < MAPA_COLS)
             {
-                int a = mapa->celdas[ef][ec].idx;  /* indice del asteroide */
-                if (a >= 0 && a < MAX_ASTEROIDES &&
-                    mapa->asteroides[a].estado == ESTADO_ACTIVO)
+                TipoCelda tipo_dest = mapa->celdas[ef][ec].tipo;
+                int idx_dest = mapa->celdas[ef][ec].idx;
+
+                if (tipo_dest == CELDA_ASTEROIDE && mapa->naves[id].combustible > 0)
                 {
-                    /* Extraer todo el contenido al inventario de la nave. */
-                    mapa->naves[id].deuterio   += mapa->asteroides[a].deuterio;
-                    mapa->naves[id].mutexio    += mapa->asteroides[a].mutexio;
-                    mapa->naves[id].semaforita += mapa->asteroides[a].semaforita;
-                    mapa->naves[id].kernelio   += mapa->asteroides[a].kernelio;
-
-                    mapa->asteroides[a].deuterio = 0;
-                    mapa->asteroides[a].mutexio = 0;
-                    mapa->asteroides[a].semaforita = 0;
-                    mapa->asteroides[a].kernelio = 0;
-
-                    /* Gastar combustible por la extraccion. */
-                    mapa->naves[id].combustible -= EXTRACCION_COSTO_COMBUSTIBLE;
-                    if (mapa->naves[id].combustible <= 0)
+                    int a = idx_dest;  /* indice del asteroide */
+                    if (a >= 0 && a < MAX_ASTEROIDES &&
+                        mapa->asteroides[a].estado == ESTADO_ACTIVO)
                     {
-                        mapa->naves[id].combustible = 0;
-                        mapa->naves[id].estado = ESTADO_DESACTIVADO;
-                    }
+                        /* Extraer todo el contenido al inventario de la nave. */
+                        mapa->naves[id].deuterio   += mapa->asteroides[a].deuterio;
+                        mapa->naves[id].mutexio    += mapa->asteroides[a].mutexio;
+                        mapa->naves[id].semaforita += mapa->asteroides[a].semaforita;
+                        mapa->naves[id].kernelio   += mapa->asteroides[a].kernelio;
 
-                    /* El asteroide quedo vacio: lo desactivamos y avisamos. */
-                    mapa->asteroides[a].estado = ESTADO_DESACTIVADO;
-                    idx_ast = a;
+                        mapa->asteroides[a].deuterio = 0;
+                        mapa->asteroides[a].mutexio = 0;
+                        mapa->asteroides[a].semaforita = 0;
+                        mapa->asteroides[a].kernelio = 0;
+
+                        /* Gastar combustible por la extraccion. */
+                        mapa->naves[id].combustible -= EXTRACCION_COSTO_COMBUSTIBLE;
+                        if (mapa->naves[id].combustible <= 0)
+                        {
+                            mapa->naves[id].combustible = 0;
+                            mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                        }
+
+                        /* El asteroide quedo vacio: lo desactivamos y avisamos. */
+                        mapa->asteroides[a].estado = ESTADO_DESACTIVADO;
+                        idx_ast = a;
+                    }
+                }
+                else if (tipo_dest == CELDA_NAVE_MUERTA)
+                {
+                    int m = idx_dest;  /* indice de la nave muerta (task #42) */
+                    if (m >= 0 && m < MAX_NAVES &&
+                        mapa->naves[m].estado == ESTADO_DESACTIVADO)
+                    {
+                        /* Saquear: transferir recursos + combustible + oxigeno. */
+                        mapa->naves[id].combustible += mapa->naves[m].combustible;
+                        mapa->naves[id].oxigeno     += mapa->naves[m].oxigeno;
+                        mapa->naves[id].deuterio    += mapa->naves[m].deuterio;
+                        mapa->naves[id].mutexio     += mapa->naves[m].mutexio;
+                        mapa->naves[id].semaforita  += mapa->naves[m].semaforita;
+                        mapa->naves[id].kernelio    += mapa->naves[m].kernelio;
+
+                        /* Vaciar la muerta para que no se sirva dos veces. */
+                        mapa->naves[m].combustible = 0;
+                        mapa->naves[m].oxigeno = 0;
+                        mapa->naves[m].deuterio = 0;
+                        mapa->naves[m].mutexio = 0;
+                        mapa->naves[m].semaforita = 0;
+                        mapa->naves[m].kernelio = 0;
+
+                        idx_muerta = m;
+                    }
                 }
             }
 
             pthread_mutex_unlock(&mapa->mutex);
 
             if (idx_ast >= 0)
-                notificar_asteroide_desactivado(idx_ast);
+                notificar_op_servidor(REG_OP_DESACTIVAR_ASTEROIDE, idx_ast);
+            if (idx_muerta >= 0)
+                notificar_op_servidor(REG_OP_SAQUEAR_NAVE, idx_muerta);
         }
 
         /* Poll cada 50ms para no quemar CPU. */

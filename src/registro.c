@@ -264,6 +264,28 @@ static void procesar_desactivar(Mapa *mapa, const MsgRegistro *req)
 }
 
 /*
+ * Nave muerta saqueada (task #42): la nave saqueadora ya transfirio los
+ * recursos; aca liberamos la celda de la nave muerta y la quitamos del mapa.
+ * req->id es el indice de la nave muerta en mapa->naves[].
+ * (procesar_desregistrar mantiene a proposito las naves muertas, por eso
+ *  necesitamos esta operacion dedicada.)
+ */
+static void procesar_saquear_nave(Mapa *mapa, const MsgRegistro *req)
+{
+    int idx = req->id;
+    if (idx < 0 || idx >= MAX_NAVES)
+        return;
+    /* Solo liberamos si efectivamente es una nave muerta. */
+    if (mapa->naves[idx].estado != ESTADO_DESACTIVADO)
+        return;
+
+    liberar_celda(mapa, mapa->naves[idx].fila, mapa->naves[idx].col);
+    memset(&mapa->naves[idx], 0, sizeof(mapa->naves[idx]));
+    if (mapa->num_naves > 0)
+        mapa->num_naves--;
+}
+
+/*
  * Asteroide agotado (task #21): la nave lo notifica cuando lo vacia.
  * Lo marcamos desactivado, liberamos su celda y bajamos el contador.
  * req->id es el indice del asteroide en mapa->asteroides[].
@@ -351,6 +373,9 @@ int registro_servidor_loop(Mapa *mapa, const Config *cfg)
             break;
         case REG_OP_DESACTIVAR_ASTEROIDE:
             procesar_desactivar_asteroide(mapa, &req);
+            break;
+        case REG_OP_SAQUEAR_NAVE:
+            procesar_saquear_nave(mapa, &req);
             break;
         default:
             break;

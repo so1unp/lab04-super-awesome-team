@@ -1,7 +1,7 @@
 CC=gcc
 BIN=./bin
 SRC=./src
-CFLAGS=-g -Wall -Wextra -Wshadow -Wconversion -Wunreachable-code -Iinclude
+CFLAGS=-std=gnu99 -g -Wall -Wextra -Wshadow -Wconversion -Wunreachable-code -Iinclude
 
 # Librerias necesarias:
 #  -lpthread : hilos POSIX (todos los procesos usan pthread_mutex/threads)
