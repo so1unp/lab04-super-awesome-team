@@ -6,7 +6,7 @@
 num_estaciones = 2
 
 # Numero de asteroides presentes al mismo tiempo en el mapa (maximo 20)
-num_asteroides = 8
+num_asteroides = 20
 
 # Precios de los minerales (lo que paga la estacion por unidad)
 precio_deuterio   = 10

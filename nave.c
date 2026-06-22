@@ -1033,13 +1033,11 @@ static void *hilo_propulsion(void *arg)
         {
             int fila_actual = mapa->naves[id].fila;
             int col_actual = mapa->naves[id].col;
-            int nueva_fila = fila_actual + df_mov;
-            int nueva_col = col_actual + dc_mov;
+            /* Movimiento toroidal: al cruzar un borde, la nave aparece en el
+             * borde opuesto (el "+ MAPA_*" evita indices negativos antes del %). */
+            int nueva_fila = (fila_actual + df_mov + MAPA_FILAS) % MAPA_FILAS;
+            int nueva_col = (col_actual + dc_mov + MAPA_COLS) % MAPA_COLS;
 
-            int dentro = (nueva_fila >= 0 && nueva_fila < MAPA_FILAS &&
-                          nueva_col >= 0 && nueva_col < MAPA_COLS);
-
-            if (dentro)
             {
                 /* Tipo de la celda destino (lectura corta bajo mutex). */
                 pthread_mutex_lock(&mapa->mutex);
