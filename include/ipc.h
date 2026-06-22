@@ -26,11 +26,28 @@
 #define MQ_ESTACION_NAME_LEN 32
 
 /*
+ * Semaforo contador del hangar de cada estacion (capacidad 3 naves).
+ * Formato: /hangar_estacion_ID  (ID = indice de la estacion en estaciones[]).
+ * Lo crea la estacion al registrarse; la nave lo abre para entrar al hangar.
+ */
+#define SEM_HANGAR_FMT "/hangar_estacion_%d"
+#define SEM_HANGAR_NAME_LEN 32
+
+/*
  * Cola de mensajes de cada nave para recibir alertas del cuadrante.
  * Formato: /cosmikernel_nave_PID
  */
 #define MQ_NAVE_FMT "/cosmikernel_nave_%d"
 #define MQ_NAVE_NAME_LEN 32
+
+/*
+ * Cola dedicada de cada nave para recibir las RESPUESTAS de transaccion
+ * de la estacion (task #44). Separada de MQ_NAVE_FMT (que usa el hilo de
+ * alertas) para no mezclar MsgAlertaCombustible con MsgTransaccionResp.
+ * Formato: /cosmikernel_nave_trx_PID
+ */
+#define MQ_NAVE_TRX_FMT "/cosmikernel_nave_trx_%d"
+#define MQ_NAVE_TRX_NAME_LEN 40
 
 /* Cola de registro: las naves y estaciones se registran al servidor aqui */
 #define MQ_REGISTRO_NAME "/cosmikernel_registro"
@@ -103,7 +120,7 @@ typedef struct
 
 /*
  * Respuesta de la estacion a la transaccion.
- * Enviada de vuelta a la cola MQ_NAVE_FMT de la nave.
+ * Enviada de vuelta a la cola MQ_NAVE_TRX_FMT de la nave (por su pid).
  */
 typedef struct
 {

@@ -53,11 +53,40 @@ int intervalo_combustible_seg = DEFAULT_INTERVALO_COMBUSTIBLE;
 // declaramos el mutex global
 pthread_mutex_t lock;
 
+// --- BITÁCORA DE TRANSACCIONES ---
+static int fd_bitacora = -1;
+static pthread_mutex_t mutex_bitacora = PTHREAD_MUTEX_INITIALIZER;
+
+/*
+ * Escribe una línea de transacción en la bitácora de forma atómica.
+ * Usa O_APPEND + write() (atómico en POSIX) protegido con mutex_bitacora.
+ * Formato: [timestamp] nave=X tipo=venta|compra recurso=Y cantidad=Z precio=W
+ */
+static void registrar_bitacora(pid_t pid_nave, const char *tipo, const char *recurso, int cantidad, int precio)
+{
+    if (fd_bitacora < 0)
+        return;
+
+    char linea[256];
+    time_t ahora = time(NULL);
+    struct tm *tm_info = localtime(&ahora);
+    char ts[32];
+    strftime(ts, sizeof(ts), "%Y-%m-%dT%H:%M:%S", tm_info);
+
+    int len = snprintf(linea, sizeof(linea),
+                       "[%s] nave=%d tipo=%s recurso=%s cantidad=%d precio=%d\n",
+                       ts, (int)pid_nave, tipo, recurso, cantidad, precio);
+
+    pthread_mutex_lock(&mutex_bitacora);
+    write(fd_bitacora, linea, (size_t)len);
+    pthread_mutex_unlock(&mutex_bitacora);
+}
+
 // Variables globales para la cola de transacciones
 char nombre_mq_transacciones[MQ_ESTACION_NAME_LEN];
 mqd_t mq_transacciones;
-sem_t *semaforo_hangar;
-char nombre_semaforo[] = "/hangar_estacion_1";
+sem_t *semaforo_hangar = SEM_FAILED;
+char nombre_semaforo[SEM_HANGAR_NAME_LEN]; /* se arma con SEM_HANGAR_FMT(id) tras registrarse */
 
 /*
  * Registra la estacion contra el servidor (cola MQ_REGISTRO_NAME) usando el
@@ -170,6 +199,7 @@ void *atender_transacciones(void *arg)
             resp.precio_total = msg.cantidad * 10;
             creditos -= resp.precio_total;
             printf("[Transacción] Nave %d VENDIÓ %d Deuterio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+            registrar_bitacora(msg.pid_nave, "venta", "deuterio", msg.cantidad, resp.precio_total);
             break;
 
         case OP_VENDER_MUTEXIO:
@@ -178,6 +208,7 @@ void *atender_transacciones(void *arg)
             resp.precio_total = msg.cantidad * 12;
             creditos -= resp.precio_total;
             printf("[Transacción] Nave %d VENDIÓ %d Mutexio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+            registrar_bitacora(msg.pid_nave, "venta", "mutexio", msg.cantidad, resp.precio_total);
             break;
 
         case OP_VENDER_SEMAFORITA:
@@ -186,6 +217,7 @@ void *atender_transacciones(void *arg)
             resp.precio_total = msg.cantidad * 15;
             creditos -= resp.precio_total;
             printf("[Transacción] Nave %d VENDIÓ %d Semaforita. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+            registrar_bitacora(msg.pid_nave, "venta", "semaforita", msg.cantidad, resp.precio_total);
             break;
 
         case OP_VENDER_KERNELIO:
@@ -194,6 +226,7 @@ void *atender_transacciones(void *arg)
             resp.precio_total = msg.cantidad * 20;
             creditos -= resp.precio_total;
             printf("[Transacción] Nave %d VENDIÓ %d Kernelio. Pagamos: %d\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+            registrar_bitacora(msg.pid_nave, "venta", "kernelio", msg.cantidad, resp.precio_total);
             break;
 
         case OP_COMPRAR_COMBUSTIBLE:
@@ -204,6 +237,7 @@ void *atender_transacciones(void *arg)
                 resp.precio_total = msg.cantidad * 25;
                 creditos += resp.precio_total;
                 printf("[Transacción] Nave %d COMPRÓ %d Combustible por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                registrar_bitacora(msg.pid_nave, "compra", "combustible", msg.cantidad, resp.precio_total);
             }
             else
             {
@@ -220,6 +254,7 @@ void *atender_transacciones(void *arg)
                 resp.precio_total = msg.cantidad * 5;
                 creditos += resp.precio_total;
                 printf("[Transacción] Nave %d COMPRÓ %d Oxígeno por %d créditos.\n", msg.pid_nave, msg.cantidad, resp.precio_total);
+                registrar_bitacora(msg.pid_nave, "compra", "oxigeno", msg.cantidad, resp.precio_total);
             }
             else
             {
@@ -234,9 +269,9 @@ void *atender_transacciones(void *arg)
         // Liberamos el inventario
         pthread_mutex_unlock(&lock);
 
-        // ENVIAMOS LA RESPUESTA A LA NAVE
-        char nombre_cola_resp[MQ_NAVE_NAME_LEN];
-        snprintf(nombre_cola_resp, sizeof(nombre_cola_resp), MQ_NAVE_FMT, msg.pid_nave);
+        // ENVIAMOS LA RESPUESTA A LA NAVE (a su cola dedicada de transacciones)
+        char nombre_cola_resp[MQ_NAVE_TRX_NAME_LEN];
+        snprintf(nombre_cola_resp, sizeof(nombre_cola_resp), MQ_NAVE_TRX_FMT, msg.pid_nave);
 
         mqd_t mq_resp = mq_open(nombre_cola_resp, O_WRONLY);
         if (mq_resp != (mqd_t)-1)
@@ -260,8 +295,9 @@ void *gasto_combustible(void *arg)
         /* Respetar el intervalo configurado en config.txt. */
         sleep((unsigned int)intervalo_combustible_seg);
 
-        int lugares_libres;
-        sem_getvalue(semaforo_hangar, &lugares_libres);
+        int lugares_libres = 0;
+        if (semaforo_hangar != SEM_FAILED)
+            sem_getvalue(semaforo_hangar, &lugares_libres);
 
         if (lugares_libres < 0)
         {
@@ -377,6 +413,11 @@ int main()
         fprintf(stderr, "estacion: arrancando con valores por defecto\n");
     intervalo_combustible_seg = cfg.intervalo_combustible_estacion;
 
+    /* Abrir (o crear) la bitácora con O_APPEND para escrituras atómicas (README). */
+    fd_bitacora = open("bitacora.txt", O_WRONLY | O_CREAT | O_APPEND, 0644);
+    if (fd_bitacora < 0)
+        perror("estacion: no se pudo abrir bitacora.txt");
+
     // inicializamos el mutex antes de arrancar cualquier hilo
     if (pthread_mutex_init(&lock, NULL) != 0)
     {
@@ -384,13 +425,8 @@ int main()
         return 1;
     }
 
-    semaforo_hangar = sem_open(nombre_semaforo, O_CREAT, 0644, 3);
-    if (semaforo_hangar == SEM_FAILED)
-    {
-        printf("Error al crear el semaforo del hangar");
-        return 1;
-    }
-    printf("Hangar inicializado con 3 espacios disponibles.\n");
+    /* El semaforo del hangar se crea despues de registrarse, con SEM_HANGAR_FMT(id),
+     * para que la nave lo encuentre por el id de la estacion. */
 
     /* Abrir la SHM del mapa (creada por el servidor) */
     int fd_shm = shm_open(SHM_MAPA_NAME, O_RDWR, 0666);
@@ -427,6 +463,15 @@ int main()
             pthread_mutex_unlock(&mapa_shm->mutex);
             printf("Estacion registrada con id %d en (%d,%d)\n",
                    mi_id_estacion, est_fila, est_col);
+
+            /* Crear el semaforo contador del hangar con nuestro id (task #23/#44),
+             * para que las naves lo abran con SEM_HANGAR_FMT(id). Capacidad 3. */
+            snprintf(nombre_semaforo, sizeof(nombre_semaforo), SEM_HANGAR_FMT, mi_id_estacion);
+            semaforo_hangar = sem_open(nombre_semaforo, O_CREAT, 0644, 3);
+            if (semaforo_hangar == SEM_FAILED)
+                perror("estacion: no se pudo crear el semaforo del hangar");
+            else
+                printf("Hangar (%s) inicializado con 3 espacios.\n", nombre_semaforo);
 
             // --- INICIO APERTURA COLA DE TRANSACCIONES ---
             struct mq_attr attr_trx;
@@ -474,9 +519,15 @@ int main()
     // limpiamos la memoria del mutex antes de apagar el programa
     mq_close(mq_transacciones);
     mq_unlink(nombre_mq_transacciones);
-    sem_close(semaforo_hangar);
-    sem_unlink(nombre_semaforo); // borra el semaforo del SO
+    if (semaforo_hangar != SEM_FAILED)
+    {
+        sem_close(semaforo_hangar);
+        sem_unlink(nombre_semaforo); // borra el semaforo del SO
+    }
     pthread_mutex_destroy(&lock);
+
+    if (fd_bitacora >= 0)
+        close(fd_bitacora);
 
     return 0;
 }
