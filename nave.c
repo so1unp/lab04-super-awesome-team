@@ -71,6 +71,7 @@ typedef struct
 {
     Mapa *mapa;
     int id_nave;
+    char cola_trx[MQ_NAVE_TRX_NAME_LEN]; /* cola dedicada a respuestas de transacciones */
 } PropulsionArgs;
 
 /* Desplazamientos por direccion: 0=arriba, 1=derecha, 2=abajo, 3=izquierda. */
@@ -93,6 +94,21 @@ typedef struct
 } EstadoAlerta;
 
 static EstadoAlerta g_alerta; /* inicializado en main (mutex) y a cero por ser static */
+
+/*
+ * Estado del hangar en que se encuentra la nave actualmente (task #44).
+ * El hilo de propulsion lo escribe; el hilo radar lo lee para mostrarlo.
+ * Como es estado LOCAL del proceso, usa su propio mutex.
+ */
+typedef struct
+{
+    pthread_mutex_t mutex;
+    int id_estacion; /* -1 = fuera del hangar */
+    sem_t *sem;      /* handle del semaforo del hangar abierto, NULL si no esta */
+    char msg[64];    /* ultimo mensaje de evento del hangar */
+} EstadoHangar;
+
+static EstadoHangar g_hangar;
 
 /* Argumentos del hilo de alertas: nombre de la cola privada de la nave. */
 typedef struct
@@ -548,31 +564,53 @@ static void *hilo_radar(void *arg)
         /* --- Linea separadora --- */
         mvwhline(win_panel, 9, 1, ACS_HLINE, ancho_panel - 2);
 
-        /* --- Debajo: eventos / alertas SOS (task #30) --- */
+        /* --- Debajo: estado del hangar (task #44) o alertas SOS (task #30) --- */
         pthread_mutex_lock(&g_alerta.mutex);
-        int al_hay = g_alerta.hay_alerta;
-        int al_id = g_alerta.id_estacion;
-        int al_pid = g_alerta.pid_estacion;
+        int al_hay  = g_alerta.hay_alerta;
+        int al_id   = g_alerta.id_estacion;
+        int al_pid  = g_alerta.pid_estacion;
         int al_comb = g_alerta.combustible;
-        int al_tot = g_alerta.total;
+        int al_tot  = g_alerta.total;
         pthread_mutex_unlock(&g_alerta.mutex);
 
-        mvwprintw(win_panel, 11, 1, "Eventos / Alertas SOS");
-        /* (linea 12 en blanco entre el titulo y el contenido) */
-        if (al_hay)
+        pthread_mutex_lock(&g_hangar.mutex);
+        int h_id = g_hangar.id_estacion;
+        char h_msg[64];
+        snprintf(h_msg, sizeof(h_msg), "%s", g_hangar.msg);
+        pthread_mutex_unlock(&g_hangar.mutex);
+
+        if (h_id >= 0)
         {
+            /* En hangar: mostrar opciones de transaccion. */
             wattron(win_panel, A_BOLD);
-            if (al_id >= 0)
-                mvwprintw(win_panel, 13, 1, "Estacion #%d pide", al_id);
-            else
-                mvwprintw(win_panel, 13, 1, "Estacion(pid %d)", al_pid);
-            mvwprintw(win_panel, 14, 1, "DEUTERIO! comb=%d", al_comb);
+            mvwprintw(win_panel, 11, 1, "** HANGAR #%d **", h_id);
             wattroff(win_panel, A_BOLD);
-            mvwprintw(win_panel, 15, 1, "recibidas: %d", al_tot);
+            mvwprintw(win_panel, 12, 1, "f=Combustible(+10)");
+            mvwprintw(win_panel, 13, 1, "o=Oxigeno    (+10)");
+            mvwprintw(win_panel, 14, 1, "1=D 2=M 3=S 4=K");
+            mvwprintw(win_panel, 15, 1, "%-26s", h_msg);
         }
         else
         {
-            mvwprintw(win_panel, 13, 1, "(sin alertas)");
+            mvwprintw(win_panel, 11, 1, "Eventos / Alertas SOS");
+            /* (linea 12 en blanco entre el titulo y el contenido) */
+            if (al_hay)
+            {
+                wattron(win_panel, A_BOLD);
+                if (al_id >= 0)
+                    mvwprintw(win_panel, 13, 1, "Estacion #%d pide", al_id);
+                else
+                    mvwprintw(win_panel, 13, 1, "Estacion(pid %d)", al_pid);
+                mvwprintw(win_panel, 14, 1, "DEUTERIO! comb=%d", al_comb);
+                wattroff(win_panel, A_BOLD);
+                mvwprintw(win_panel, 15, 1, "recibidas: %d", al_tot);
+            }
+            else
+            {
+                mvwprintw(win_panel, 13, 1, "(sin alertas)");
+                if (h_msg[0] != '\0')
+                    mvwprintw(win_panel, 14, 1, "%-26s", h_msg);
+            }
         }
 
         /* --- Al pie: identificacion de la nave --- */
@@ -610,6 +648,143 @@ static void *hilo_radar(void *arg)
     delwin(win_mapa);
     delwin(win_panel);
     return NULL;
+}
+
+/* ─── Helpers de hangar (task #44) ────────────────────────────────────────── */
+
+/*
+ * Libera el hangar que la nave tiene adquirido:
+ *   - Resetea g_hangar (estado local).
+ *   - Borra el PID de la nave de Estacion.hangar[] en la SHM.
+ *   - Hace sem_post + sem_close al semaforo del hangar.
+ * Seguro de llamar aunque la nave no este en ningun hangar (no-op).
+ */
+static void salir_hangar(Mapa *mapa)
+{
+    pthread_mutex_lock(&g_hangar.mutex);
+    if (g_hangar.id_estacion < 0)
+    {
+        pthread_mutex_unlock(&g_hangar.mutex);
+        return;
+    }
+    int id_est  = g_hangar.id_estacion;
+    sem_t *sem  = g_hangar.sem;
+    g_hangar.id_estacion = -1;
+    g_hangar.sem = NULL;
+    snprintf(g_hangar.msg, sizeof(g_hangar.msg), "Hangar liberado");
+    pthread_mutex_unlock(&g_hangar.mutex);
+
+    /* Borrar PID de la lista de ocupantes en la SHM. */
+    pthread_mutex_lock(&mapa->mutex);
+    for (int i = 0; i < 3; i++)
+    {
+        if (mapa->estaciones[id_est].hangar[i] == (int)getpid())
+        {
+            mapa->estaciones[id_est].hangar[i] = 0;
+            break;
+        }
+    }
+    pthread_mutex_unlock(&mapa->mutex);
+
+    if (sem != NULL)
+    {
+        sem_post(sem);
+        sem_close(sem);
+    }
+}
+
+/*
+ * Envia una transaccion a la cola de la estacion y espera la respuesta en
+ * cola_trx. Si la transaccion tiene exito, actualiza el inventario de la
+ * nave en la SHM y escribe el resultado en g_hangar.msg para que el radar
+ * lo muestre en el panel.
+ */
+static void enviar_transaccion(Mapa *mapa, int id_nave, int id_estacion,
+                               TipoOperacion op, int cantidad,
+                               const char *cola_trx)
+{
+    char nombre_mq[MQ_ESTACION_NAME_LEN];
+    snprintf(nombre_mq, sizeof(nombre_mq), MQ_ESTACION_FMT, id_estacion);
+
+    mqd_t mq = mq_open(nombre_mq, O_WRONLY);
+    if (mq == (mqd_t)-1)
+    {
+        pthread_mutex_lock(&g_hangar.mutex);
+        snprintf(g_hangar.msg, sizeof(g_hangar.msg), "Sin conexion estacion");
+        pthread_mutex_unlock(&g_hangar.mutex);
+        return;
+    }
+
+    MsgTransaccion msg;
+    memset(&msg, 0, sizeof(msg));
+    msg.operacion = op;
+    msg.cantidad  = cantidad;
+    msg.pid_nave  = getpid();
+    msg.id_nave   = id_nave;
+    snprintf(msg.cola_respuesta, sizeof(msg.cola_respuesta), "%s", cola_trx);
+
+    if (mq_send(mq, (const char *)&msg, sizeof(msg), 0) == -1)
+    {
+        mq_close(mq);
+        return;
+    }
+    mq_close(mq);
+
+    /* Leer respuesta de la cola dedicada con timeout 2s. */
+    mqd_t mq_resp = mq_open(cola_trx, O_RDONLY);
+    if (mq_resp == (mqd_t)-1)
+        return;
+
+    MsgTransaccionResp resp;
+    char buf[sizeof(MsgTransaccionResp) + 16]; /* margen de seguridad */
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += 2;
+    ssize_t n = mq_timedreceive(mq_resp, buf, sizeof(buf), NULL, &ts);
+    mq_close(mq_resp);
+
+    if (n <= 0)
+        return;
+
+    memcpy(&resp, buf, sizeof(resp));
+
+    if (resp.error == 0)
+    {
+        pthread_mutex_lock(&mapa->mutex);
+        switch (op)
+        {
+        case OP_COMPRAR_COMBUSTIBLE:
+            mapa->naves[id_nave].combustible += resp.cantidad_efectiva;
+            break;
+        case OP_COMPRAR_OXIGENO:
+            mapa->naves[id_nave].oxigeno += resp.cantidad_efectiva;
+            break;
+        case OP_VENDER_DEUTERIO:
+            mapa->naves[id_nave].deuterio -= resp.cantidad_efectiva;
+            break;
+        case OP_VENDER_MUTEXIO:
+            mapa->naves[id_nave].mutexio -= resp.cantidad_efectiva;
+            break;
+        case OP_VENDER_SEMAFORITA:
+            mapa->naves[id_nave].semaforita -= resp.cantidad_efectiva;
+            break;
+        case OP_VENDER_KERNELIO:
+            mapa->naves[id_nave].kernelio -= resp.cantidad_efectiva;
+            break;
+        }
+        pthread_mutex_unlock(&mapa->mutex);
+
+        pthread_mutex_lock(&g_hangar.mutex);
+        snprintf(g_hangar.msg, sizeof(g_hangar.msg),
+                 "OK: %d u. / $%d", resp.cantidad_efectiva, resp.precio_total);
+        pthread_mutex_unlock(&g_hangar.mutex);
+    }
+    else
+    {
+        pthread_mutex_lock(&g_hangar.mutex);
+        snprintf(g_hangar.msg, sizeof(g_hangar.msg), "Sin stock");
+        pthread_mutex_unlock(&g_hangar.mutex);
+    }
 }
 
 /* ─── Hilo de propulsion (task #19, usa semaforos de celda #29) ────────── */
@@ -668,6 +843,87 @@ static void *hilo_propulsion(void *arg)
             mover = 1;
             break;
 
+        /* Transacciones en hangar (task #44): f=combustible, o=oxigeno,
+         * 1-4=vender minerales (deuterio/mutexio/semaforita/kernelio). */
+        case 'f':
+        case 'F':
+        {
+            pthread_mutex_lock(&g_hangar.mutex);
+            int h_id_f = g_hangar.id_estacion;
+            pthread_mutex_unlock(&g_hangar.mutex);
+            if (h_id_f >= 0)
+                enviar_transaccion(mapa, id, h_id_f,
+                                   OP_COMPRAR_COMBUSTIBLE, 10, args->cola_trx);
+            break;
+        }
+        case 'o':
+        case 'O':
+        {
+            pthread_mutex_lock(&g_hangar.mutex);
+            int h_id_o = g_hangar.id_estacion;
+            pthread_mutex_unlock(&g_hangar.mutex);
+            if (h_id_o >= 0)
+                enviar_transaccion(mapa, id, h_id_o,
+                                   OP_COMPRAR_OXIGENO, 10, args->cola_trx);
+            break;
+        }
+        case '1':
+        {
+            pthread_mutex_lock(&g_hangar.mutex);
+            int h_id_1 = g_hangar.id_estacion;
+            pthread_mutex_unlock(&g_hangar.mutex);
+            if (h_id_1 >= 0)
+            {
+                int qty = mapa->naves[id].deuterio;
+                if (qty > 0)
+                    enviar_transaccion(mapa, id, h_id_1,
+                                       OP_VENDER_DEUTERIO, qty, args->cola_trx);
+            }
+            break;
+        }
+        case '2':
+        {
+            pthread_mutex_lock(&g_hangar.mutex);
+            int h_id_2 = g_hangar.id_estacion;
+            pthread_mutex_unlock(&g_hangar.mutex);
+            if (h_id_2 >= 0)
+            {
+                int qty = mapa->naves[id].mutexio;
+                if (qty > 0)
+                    enviar_transaccion(mapa, id, h_id_2,
+                                       OP_VENDER_MUTEXIO, qty, args->cola_trx);
+            }
+            break;
+        }
+        case '3':
+        {
+            pthread_mutex_lock(&g_hangar.mutex);
+            int h_id_3 = g_hangar.id_estacion;
+            pthread_mutex_unlock(&g_hangar.mutex);
+            if (h_id_3 >= 0)
+            {
+                int qty = mapa->naves[id].semaforita;
+                if (qty > 0)
+                    enviar_transaccion(mapa, id, h_id_3,
+                                       OP_VENDER_SEMAFORITA, qty, args->cola_trx);
+            }
+            break;
+        }
+        case '4':
+        {
+            pthread_mutex_lock(&g_hangar.mutex);
+            int h_id_4 = g_hangar.id_estacion;
+            pthread_mutex_unlock(&g_hangar.mutex);
+            if (h_id_4 >= 0)
+            {
+                int qty = mapa->naves[id].kernelio;
+                if (qty > 0)
+                    enviar_transaccion(mapa, id, h_id_4,
+                                       OP_VENDER_KERNELIO, qty, args->cola_trx);
+            }
+            break;
+        }
+
         default:
             break;
         }
@@ -675,42 +931,110 @@ static void *hilo_propulsion(void *arg)
         if (mover)
         {
             int fila_actual = mapa->naves[id].fila;
-            int col_actual = mapa->naves[id].col;
+            int col_actual  = mapa->naves[id].col;
+            int nueva_fila  = fila_actual + df_mov;
+            int nueva_col   = col_actual  + dc_mov;
 
-            int nueva_fila = fila_actual + df_mov;
-            int nueva_col = col_actual + dc_mov;
-
-            if (mapa->naves[id].combustible > 0)
+            /* Verificar que el destino este dentro del mapa. */
+            if (nueva_fila >= 0 && nueva_fila < MAPA_FILAS &&
+                nueva_col  >= 0 && nueva_col  < MAPA_COLS)
             {
-                /* Tomamos el semaforo de la celda destino (task #29). Si la
-                 * celda esta fuera del mapa, semaforo_celda_abrir devuelve NULL
-                 * (no existe ese semaforo) y la nave no se mueve. */
-                sem_t *semaforo_celda = semaforo_celda_abrir(nueva_fila, nueva_col);
+                /* Leer el tipo de celda destino bajo mutex (lectura corta). */
+                pthread_mutex_lock(&mapa->mutex);
+                TipoCelda tipo_dest = mapa->celdas[nueva_fila][nueva_col].tipo;
+                int idx_dest        = mapa->celdas[nueva_fila][nueva_col].idx;
+                pthread_mutex_unlock(&mapa->mutex);
 
-                if (semaforo_celda != NULL)
+                if (tipo_dest == CELDA_ESTACION)
                 {
-                    sem_wait(semaforo_celda);
+                    /*
+                     * La nave intenta "entrar" a la estacion: adquirir el
+                     * semaforo contador del hangar (task #44).
+                     * No hay movimiento fisico sobre la celda de la estacion.
+                     */
+                    pthread_mutex_lock(&g_hangar.mutex);
+                    int ya_dentro = (g_hangar.id_estacion >= 0);
+                    pthread_mutex_unlock(&g_hangar.mutex);
 
-                    pthread_mutex_lock(&mapa->mutex);
+                    if (!ya_dentro && idx_dest >= 0 && idx_dest < MAX_ESTACIONES)
+                    {
+                        char sem_name[SEM_HANGAR_NAME_LEN];
+                        snprintf(sem_name, sizeof(sem_name),
+                                 SEM_HANGAR_FMT, idx_dest);
+                        sem_t *sem_h = sem_open(sem_name, 0); /* abrir existente */
+                        if (sem_h != SEM_FAILED)
+                        {
+                            if (sem_trywait(sem_h) == 0)
+                            {
+                                /* Lugar libre: registrar en SHM y activar estado. */
+                                pthread_mutex_lock(&mapa->mutex);
+                                for (int i = 0; i < 3; i++)
+                                {
+                                    if (mapa->estaciones[idx_dest].hangar[i] == 0)
+                                    {
+                                        mapa->estaciones[idx_dest].hangar[i] = (int)getpid();
+                                        break;
+                                    }
+                                }
+                                pthread_mutex_unlock(&mapa->mutex);
 
-                    mapa->naves[id].fila = nueva_fila;
-                    mapa->naves[id].col = nueva_col;
+                                pthread_mutex_lock(&g_hangar.mutex);
+                                g_hangar.id_estacion = idx_dest;
+                                g_hangar.sem = sem_h;
+                                snprintf(g_hangar.msg, sizeof(g_hangar.msg),
+                                         "Hangar #%d: f/o/1/2/3/4", idx_dest);
+                                pthread_mutex_unlock(&g_hangar.mutex);
+                            }
+                            else
+                            {
+                                /* Hangar lleno (capacidad 3 alcanzada). */
+                                sem_close(sem_h);
+                                pthread_mutex_lock(&g_hangar.mutex);
+                                snprintf(g_hangar.msg, sizeof(g_hangar.msg),
+                                         "Hangar lleno");
+                                pthread_mutex_unlock(&g_hangar.mutex);
+                            }
+                        }
+                    }
+                    /* No moverse fisicamente sobre la celda de la estacion. */
+                }
+                else if (mapa->naves[id].combustible > 0)
+                {
+                    /* Movimiento normal. Si estabamos en el hangar, salir primero. */
+                    pthread_mutex_lock(&g_hangar.mutex);
+                    int en_hangar = (g_hangar.id_estacion >= 0);
+                    pthread_mutex_unlock(&g_hangar.mutex);
+                    if (en_hangar)
+                        salir_hangar(mapa);
 
-                    mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
-                    mapa->celdas[nueva_fila][nueva_col].idx = id;
+                    /* Semaforo de la celda destino (task #29). Si la celda esta
+                     * fuera del mapa semaforo_celda_abrir devuelve NULL. */
+                    sem_t *semaforo_celda = semaforo_celda_abrir(nueva_fila, nueva_col);
+                    if (semaforo_celda != NULL)
+                    {
+                        sem_wait(semaforo_celda);
 
-                    mapa->celdas[fila_actual][col_actual].tipo = CELDA_VACIA;
-                    mapa->celdas[fila_actual][col_actual].idx = -1;
+                        pthread_mutex_lock(&mapa->mutex);
 
-                    mapa->naves[id].combustible--;
-                    if (mapa->naves[id].combustible == 0)
-                        mapa->naves[id].estado = ESTADO_DESACTIVADO;
+                        mapa->naves[id].fila = nueva_fila;
+                        mapa->naves[id].col  = nueva_col;
 
-                    pthread_mutex_unlock(&mapa->mutex);
+                        mapa->celdas[nueva_fila][nueva_col].tipo = CELDA_NAVE;
+                        mapa->celdas[nueva_fila][nueva_col].idx  = id;
 
-                    /* Liberamos la celda anterior (su semaforo) y cerramos. */
-                    sem_post(semaforo_celda);
-                    semaforo_celda_cerrar(semaforo_celda);
+                        mapa->celdas[fila_actual][col_actual].tipo = CELDA_VACIA;
+                        mapa->celdas[fila_actual][col_actual].idx  = -1;
+
+                        mapa->naves[id].combustible--;
+                        if (mapa->naves[id].combustible == 0)
+                            mapa->naves[id].estado = ESTADO_DESACTIVADO;
+
+                        pthread_mutex_unlock(&mapa->mutex);
+
+                        /* Liberar celda anterior. */
+                        sem_post(semaforo_celda);
+                        semaforo_celda_cerrar(semaforo_celda);
+                    }
                 }
             }
         }
@@ -720,6 +1044,8 @@ static void *hilo_propulsion(void *arg)
         nanosleep(&ts, NULL);
     }
 
+    /* Al salir del loop, liberar el hangar si todavia lo tenemos. */
+    salir_hangar(mapa);
     return NULL;
 }
 
@@ -738,6 +1064,7 @@ int main(int argc, char *argv[])
     PropulsionArgs propulsion_args;
     struct sigaction sa;
     char nombre_cola_propia[MQ_NAVE_NAME_LEN];
+    char nombre_cola_trx[MQ_NAVE_TRX_NAME_LEN];
 
     /* 1) Configuracion. */
     if (config_load(config_path, &cfg) == -1)
@@ -780,11 +1107,32 @@ int main(int argc, char *argv[])
     pthread_mutex_unlock(&mapa->mutex);
 
     snprintf(nombre_cola_propia, sizeof(nombre_cola_propia), MQ_NAVE_FMT, (int)getpid());
+    snprintf(nombre_cola_trx,    sizeof(nombre_cola_trx),    MQ_NAVE_TRX_FMT, (int)getpid());
+
+    /* Cola dedicada para respuestas de transacciones (tarea #44). */
+    {
+        struct mq_attr attr_trx;
+        attr_trx.mq_flags   = 0;
+        attr_trx.mq_maxmsg  = 4;
+        attr_trx.mq_msgsize = (long)sizeof(MsgTransaccionResp);
+        attr_trx.mq_curmsgs = 0;
+        mqd_t mq_trx = mq_open(nombre_cola_trx, O_CREAT | O_RDONLY, 0666, &attr_trx);
+        if (mq_trx == (mqd_t)-1)
+            perror("nave: no se pudo crear la cola de transacciones");
+        else
+            mq_close(mq_trx); /* el hilo la re-abre por transaccion */
+    }
 
     /* Estado de alertas (task #30): mutex local + nombre de cola para el hilo. */
     pthread_mutex_init(&g_alerta.mutex, NULL);
     g_alerta.id_estacion = -1;
     snprintf(alerta_args.cola, sizeof(alerta_args.cola), "%s", nombre_cola_propia);
+
+    /* Estado del hangar (task #44): mutex local. */
+    pthread_mutex_init(&g_hangar.mutex, NULL);
+    g_hangar.id_estacion = -1;
+    g_hangar.sem = NULL;
+    g_hangar.msg[0] = '\0';
 
     /* 5) Inicializar ncurses. */
     initscr();
@@ -851,6 +1199,8 @@ int main(int argc, char *argv[])
     /* Hilo de propulsion (task #19). */
     propulsion_args.mapa = mapa;
     propulsion_args.id_nave = id_nave;
+    snprintf(propulsion_args.cola_trx, sizeof(propulsion_args.cola_trx),
+             "%s", nombre_cola_trx);
     if (pthread_create(&th_propulsion, NULL, hilo_propulsion, &propulsion_args) != 0)
     {
         g_salir = 1;
@@ -876,6 +1226,9 @@ int main(int argc, char *argv[])
     /* 9) Cleanup IPC. La SHM la destruye el servidor, no la nave. */
     munmap(mapa, sizeof(Mapa));
     mq_unlink(nombre_cola_propia);
+    mq_unlink(nombre_cola_trx);
+    pthread_mutex_destroy(&g_alerta.mutex);
+    pthread_mutex_destroy(&g_hangar.mutex);
 
     printf("nave: saliendo limpiamente\n");
     return EXIT_SUCCESS;

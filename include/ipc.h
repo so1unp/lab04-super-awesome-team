@@ -18,6 +18,15 @@
 #define SEM_CELDA_NAME_LEN 32
 
 /*
+ * Semaforo contador del hangar de cada estacion (capacidad maxima 3 naves).
+ * Creado por la estacion al iniciar con valor 3. La nave llama sem_trywait
+ * (no bloqueante) al intentar entrar; sem_post al salir.
+ * Formato: /hangar_estacion_ID
+ */
+#define SEM_HANGAR_FMT      "/hangar_estacion_%d"
+#define SEM_HANGAR_NAME_LEN 32
+
+/*
  * Cola de mensajes de la estacion (una por estacion).
  * Las naves envian aqui sus transacciones cuando estan en el hangar.
  * Formato: /cosmikernel_estacion_ID
@@ -31,6 +40,14 @@
  */
 #define MQ_NAVE_FMT "/cosmikernel_nave_%d"
 #define MQ_NAVE_NAME_LEN 32
+
+/*
+ * Cola privada de la nave para respuestas de transacciones (separada de la
+ * cola de alertas para evitar que el hilo de alertas consuma las respuestas).
+ * Formato: /cosmikernel_nave_trx_PID
+ */
+#define MQ_NAVE_TRX_FMT      "/cosmikernel_nave_trx_%d"
+#define MQ_NAVE_TRX_NAME_LEN 40
 
 /* Cola de registro: las naves y estaciones se registran al servidor aqui */
 #define MQ_REGISTRO_NAME "/cosmikernel_registro"
@@ -98,6 +115,7 @@ typedef struct
     int cantidad;
     pid_t pid_nave;
     int id_nave; /* indice en naves[] del Mapa */
+    char cola_respuesta[MQ_NAVE_TRX_NAME_LEN]; /* donde enviar la respuesta */
 } MsgTransaccion;
 
 /*
