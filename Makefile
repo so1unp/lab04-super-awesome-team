@@ -17,21 +17,27 @@ LIST=$(addprefix $(BIN)/, $(PROG))
 # Objetos compartidos compilados desde src/
 SHARED_OBJS=$(SRC)/config.o $(SRC)/shm.o $(SRC)/asteroides.o $(SRC)/registro.o $(SRC)/apagado.o $(SRC)/semaforos.o
 
+# Headers: si cambia cualquiera (p.ej. config.h con el tamano del mapa) se
+# recompila todo lo que dependa de ellos.
+HEADERS=$(wildcard include/*.h)
+
 .PHONY: all
 all: $(LIST)
 
-# Objetos de src/
-$(SRC)/%.o: $(SRC)/%.c
+# Objetos de src/ (dependen de los headers)
+$(SRC)/%.o: $(SRC)/%.c $(HEADERS)
 	$(CC) -c -o $@ $< $(CFLAGS)
 
-$(BIN)/servidor: servidor.c $(SHARED_OBJS)
-	$(CC) -o $@ $^ $(CFLAGS) $(LDLIBS_COMMON)
+# En los binarios, $(filter-out ...) saca los .h del comando de gcc
+# (estan como dependencia solo para forzar la recompilacion, no para linkear).
+$(BIN)/servidor: servidor.c $(SHARED_OBJS) $(HEADERS)
+	$(CC) -o $@ $(filter-out $(HEADERS),$^) $(CFLAGS) $(LDLIBS_COMMON)
 
-$(BIN)/nave: nave.c $(SHARED_OBJS)
-	$(CC) -o $@ $^ $(CFLAGS) $(LDLIBS_NAVE)
+$(BIN)/nave: nave.c $(SHARED_OBJS) $(HEADERS)
+	$(CC) -o $@ $(filter-out $(HEADERS),$^) $(CFLAGS) $(LDLIBS_NAVE)
 
-$(BIN)/estacion: estacion.c $(SHARED_OBJS)
-	$(CC) -o $@ $^ $(CFLAGS) $(LDLIBS_COMMON)
+$(BIN)/estacion: estacion.c $(SHARED_OBJS) $(HEADERS)
+	$(CC) -o $@ $(filter-out $(HEADERS),$^) $(CFLAGS) $(LDLIBS_COMMON)
 
 test:
 	@./test.sh ||:

@@ -27,8 +27,8 @@
  *   -> 18 filas: 18+5=23  (entra en 24)
  *   -> 46 cols:  46+31=77 (entra en 80)
  */
-#define MAPA_FILAS 18
-#define MAPA_COLS 46
+#define MAPA_FILAS 24
+#define MAPA_COLS 80
 
 /* Recursos iniciales */
 #define NAVE_COMBUSTIBLE_INICIAL 100
