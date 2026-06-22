@@ -297,6 +297,16 @@ void *atender_transacciones(void *arg)
         }
         }
 
+        /* Reflejar el combustible actual de la estacion en la SHM para que el
+         * radar de las naves vea AL INSTANTE el efecto de la transaccion (p.ej.
+         * la compra de combustible), no recien en el proximo tick de consumo. */
+        if (mapa_shm != NULL && mi_id_estacion >= 0)
+        {
+            pthread_mutex_lock(&mapa_shm->mutex);
+            mapa_shm->estaciones[mi_id_estacion].combustible = combustible;
+            pthread_mutex_unlock(&mapa_shm->mutex);
+        }
+
         printf(" -> Caja actual: %d créditos | Oxígeno rest: %d\n", creditos, oxigeno);
 
         // Liberamos el inventario
