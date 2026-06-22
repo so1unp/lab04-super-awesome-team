@@ -213,7 +213,8 @@ static void procesar_desregistrar(Mapa *mapa, const Config *cfg, const MsgRegist
 static int estaciones_activas_count(const Mapa *mapa)
 {
     int activas = 0;
-    for (int i = 0; i < MAX_ESTACIONES; i++) {
+    for (int i = 0; i < MAX_ESTACIONES; i++)
+    {
         if (mapa->estaciones[i].pid != 0 &&
             mapa->estaciones[i].estado == ESTADO_ACTIVO)
             activas++;
@@ -225,7 +226,8 @@ static void notificar_fin_juego(const Mapa *mapa)
 {
     printf("servidor: FIN DE JUEGO - todas las estaciones desactivadas\n");
     /* Notificar a todas las naves activas */
-    for (int i = 0; i < MAX_NAVES; i++) {
+    for (int i = 0; i < MAX_NAVES; i++)
+    {
         if (mapa->naves[i].pid != 0)
             kill(mapa->naves[i].pid, SIGUSR1);
     }
@@ -240,7 +242,8 @@ static void procesar_desactivar_estacion(Mapa *mapa, const MsgRegistro *req)
     mapa->estaciones[idx].estado = ESTADO_DESACTIVADO;
     printf("servidor: estacion %d desactivada (sin combustible)\n", idx);
 
-    if (estaciones_activas_count(mapa) == 0) {
+    if (estaciones_activas_count(mapa) == 0)
+    {
         mapa->juego_activo = 0;
         notificar_fin_juego(mapa);
         g_stop = 1;
