@@ -1,17 +1,31 @@
-# CosmiKernel - estado guardado: Thu Jun 18 15:12:27 2026
+# CosmiKernel - estado guardado: Mon Jun 29 01:02:02 2026
 juego_activo=1
 
-# Asteroides (8)
-asteroide fila=0 col=77 deuterio=95 mutexio=91 semaforita=81 kernelio=45 estado=0
-asteroide fila=23 col=67 deuterio=7 mutexio=97 semaforita=55 kernelio=48 estado=0
-asteroide fila=4 col=59 deuterio=15 mutexio=20 semaforita=23 kernelio=29 estado=0
-asteroide fila=3 col=52 deuterio=4 mutexio=10 semaforita=86 kernelio=98 estado=0
-asteroide fila=10 col=33 deuterio=28 mutexio=31 semaforita=49 kernelio=97 estado=0
-asteroide fila=16 col=67 deuterio=80 mutexio=27 semaforita=97 kernelio=61 estado=0
-asteroide fila=21 col=9 deuterio=70 mutexio=45 semaforita=93 kernelio=25 estado=0
-asteroide fila=23 col=4 deuterio=98 mutexio=7 semaforita=8 kernelio=20 estado=0
+# Asteroides (20)
+asteroide fila=19 col=72 deuterio=64 mutexio=45 semaforita=1 kernelio=84 estado=0
+asteroide fila=12 col=67 deuterio=21 mutexio=84 semaforita=52 kernelio=31 estado=0
+asteroide fila=16 col=53 deuterio=17 mutexio=56 semaforita=36 kernelio=95 estado=0
+asteroide fila=23 col=13 deuterio=88 mutexio=27 semaforita=84 kernelio=99 estado=0
+asteroide fila=3 col=58 deuterio=50 mutexio=42 semaforita=46 kernelio=38 estado=0
+asteroide fila=2 col=15 deuterio=99 mutexio=27 semaforita=12 kernelio=82 estado=0
+asteroide fila=22 col=72 deuterio=49 mutexio=31 semaforita=36 kernelio=42 estado=0
+asteroide fila=18 col=78 deuterio=87 mutexio=25 semaforita=79 kernelio=28 estado=0
+asteroide fila=8 col=53 deuterio=35 mutexio=39 semaforita=33 kernelio=28 estado=0
+asteroide fila=6 col=47 deuterio=76 mutexio=6 semaforita=11 kernelio=73 estado=0
+asteroide fila=3 col=66 deuterio=72 mutexio=9 semaforita=25 kernelio=16 estado=0
+asteroide fila=5 col=20 deuterio=16 mutexio=92 semaforita=98 kernelio=55 estado=0
+asteroide fila=12 col=7 deuterio=30 mutexio=32 semaforita=80 kernelio=36 estado=0
+asteroide fila=0 col=43 deuterio=86 mutexio=73 semaforita=95 kernelio=95 estado=0
+asteroide fila=1 col=3 deuterio=89 mutexio=92 semaforita=13 kernelio=52 estado=0
+asteroide fila=1 col=8 deuterio=21 mutexio=73 semaforita=11 kernelio=0 estado=0
+asteroide fila=15 col=38 deuterio=42 mutexio=35 semaforita=96 kernelio=2 estado=0
+asteroide fila=21 col=29 deuterio=15 mutexio=73 semaforita=12 kernelio=95 estado=0
+asteroide fila=7 col=39 deuterio=14 mutexio=95 semaforita=80 kernelio=25 estado=0
+asteroide fila=0 col=2 deuterio=2 mutexio=83 semaforita=97 kernelio=64 estado=0
 
 # Naves (1)
-nave id=0 pid=310836 fila=3 col=54 combustible=62 oxigeno=0 deuterio=0 mutexio=0 semaforita=0 kernelio=0 estado=1
+nave id=0 pid=124440 fila=12 col=51 combustible=97 oxigeno=95 deuterio=0 mutexio=0 semaforita=0 kernelio=0 estado=0
 
-# Estaciones (0)
+# Estaciones (2)
+estacion id=0 pid=124377 fila=16 col=68 combustible=1800 estado=0
+estacion id=1 pid=124376 fila=20 col=29 combustible=1800 estado=0
