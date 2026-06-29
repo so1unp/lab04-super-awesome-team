@@ -1,3 +1,5 @@
+#include <stdbool.h>
+
 #ifndef NAVE_H
 #define NAVE_H
 
@@ -24,6 +26,7 @@ typedef struct {
     int id;  /* indice en Mapa.naves[] */
     int direccion;
     int dinero; /* creditos: gana vendiendo minerales, gasta comprando combustible/oxigeno */
+    bool escudo;
 } Nave;
 
 #endif /* NAVE_H */

@@ -352,7 +352,7 @@ static void procesar_desactivar_asteroide(Mapa *mapa, const MsgRegistro *req)
         mapa->num_asteroides--;
 }
 
-int registro_servidor_loop(Mapa *mapa, const Config *cfg)
+int registro_servidor_loop(Mapa *mapa, const Config *cfg, int cant_estaciones)
 {
     struct mq_attr attr;
     mqd_t qreg;
@@ -379,6 +379,40 @@ int registro_servidor_loop(Mapa *mapa, const Config *cfg)
     printf("servidor: cola de registro '%s' lista\n", MQ_REGISTRO_NAME);
 
     srand((unsigned int)time(NULL));
+    if (cant_estaciones > MAX_ESTACIONES)
+    {
+        cant_estaciones = MAX_ESTACIONES;
+    }
+    
+    for (int i = 0; i < cant_estaciones; i++)
+    {
+        /* Lanzar proceso(s) estacion automaticamente. */
+        pid_t pid_estacion = fork();
+        if (pid_estacion == 0)
+        {
+            /* Proceso hijo: redirigir stdout y stderr a /dev/null antes de exec. */
+            int fd_null = open("/dev/null", O_WRONLY);
+            if (fd_null != -1)
+            {
+                dup2(fd_null, STDOUT_FILENO);
+                dup2(fd_null, STDERR_FILENO);
+                close(fd_null);
+            }
+            
+            /* Proceso hijo: se convierte en la estacion. */
+            execl("./bin/estacion", "estacion", NULL);
+            /* Si execl falla, no queremos dos procesos servidor corriendo el mismo codigo. */
+            perror("execl(estacion)");
+            _exit(EXIT_FAILURE);
+        }
+        else if (pid_estacion == -1)
+        {
+            perror("fork(estacion)");
+            /* Decidir si esto es fatal o no para el servidor. */
+        }
+    }
+
+    printf("%d", mapa->num_estaciones);
 
     while (!g_stop)
     {
