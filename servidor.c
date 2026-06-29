@@ -137,9 +137,14 @@ static void avanzar_misiles(Mapa *mapa)
         {
             if (idx >= 0 && idx < MAX_NAVES)
             {
-                mapa->naves[idx].estado = ESTADO_DESACTIVADO;
-                mapa->celdas[nf][nc].tipo = CELDA_NAVE_MUERTA;
-                mapa->celdas[nf][nc].idx = idx;
+                if(mapa->naves[idx].escudo){
+                    mapa->naves[idx].escudo = false;
+                    mapa->celdas[nf][nc].idx = idx;
+                }else{
+                    mapa->naves[idx].estado = ESTADO_DESACTIVADO;
+                    mapa->celdas[nf][nc].tipo = CELDA_NAVE_MUERTA;
+                    mapa->celdas[nf][nc].idx = idx;   
+                }
             }
             m->activo = 0;
         }
@@ -184,7 +189,9 @@ static void *simulacion_thread(void *arg)
 
 int main(int argc, char *argv[])
 {
-    const char *config_path = (argc > 1) ? argv[1] : CONFIG_PATH;
+    int cant_estaciones = (argc > 1) ? atoi(argv[1]) : (int)MAX_ESTACIONES;
+
+    const char *config_path = CONFIG_PATH;
     Config cfg;
     Mapa *mapa;
 
@@ -222,7 +229,7 @@ int main(int argc, char *argv[])
         fprintf(stderr, "servidor: no se pudo crear el hilo de simulacion\n");
 
     printf("servidor: esperando registros (Ctrl+C para salir)\n");
-    (void)registro_servidor_loop(mapa, &cfg);
+    (void)registro_servidor_loop(mapa, &cfg, cant_estaciones);
 
     /* Parar el hilo de simulacion antes de apagar. */
     g_sim_stop = 1;

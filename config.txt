@@ -19,13 +19,13 @@ precio_combustible = 12
 precio_oxigeno     = 8
 
 # Umbral de combustible de la estacion para enviar alerta a las naves
-umbral_combustible_estacion = 30
+umbral_combustible_estacion = 1900
 
 # Segundos entre cada decremento de oxigeno en la nave
 intervalo_oxigeno_nave = 2
 
 # Segundos entre cada decremento de combustible en la estacion
-intervalo_combustible_estacion = 2
+intervalo_combustible_estacion = 1
 
 # Milisegundos entre cada refresco del radar (ncurses) en la nave (rango 10-5000)
 radar_refresh_ms = 100
