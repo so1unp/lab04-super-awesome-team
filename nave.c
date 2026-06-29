@@ -498,8 +498,8 @@ static void *hilo_radar(void *arg)
     }
     else if (alto_info >= 3)
     {
-        alto_controles = 3;            /* prioridad: que SIEMPRE se vean los controles */
-        alto_detalle = alto_info - 3;  /* si queda < 3, los cuadros de detalle no se dibujan */
+        alto_controles = 3;           /* prioridad: que SIEMPRE se vean los controles */
+        alto_detalle = alto_info - 3; /* si queda < 3, los cuadros de detalle no se dibujan */
     }
     /* Cap: el cuadro de detalle no debe ser tan alto. Alcanza con mostrar hasta
      * MAX_NAVES naves (8) => MAX_NAVES + 2 filas (contenido + bordes). El resto
@@ -594,13 +594,21 @@ static void *hilo_radar(void *arg)
                                          : (chtype)CELDA_NAVE;
                     if (idx_nave == id)
                     {
-                        wattron(win_mapa, A_BOLD | A_REVERSE);
+                        int escudo = (naves_local[idx_nave].escudo);
+                        int color = escudo ? 1 : 2; /* 1=verde activa, 2=rojo "off" */
+
+                        wattron(win_mapa, COLOR_PAIR(color) | A_BOLD | A_REVERSE);
                         mvwaddch(win_mapa, mapa_off_y + f, mapa_off_x + c, simbolo);
-                        wattroff(win_mapa, A_BOLD | A_REVERSE);
+                        wattroff(win_mapa, COLOR_PAIR(color) | A_BOLD | A_REVERSE);
                     }
                     else
                     {
+                        int escudo = (naves_local[idx_nave].escudo);
+                        int color = escudo ? 1 : 2; /* 1=verde activa, 2=rojo "off" */
+
+                        wattron(win_mapa, COLOR_PAIR(color));
                         mvwaddch(win_mapa, mapa_off_y + f, mapa_off_x + c, simbolo);
+                        wattroff(win_mapa, COLOR_PAIR(color));
                     }
                 }
                 else
@@ -666,14 +674,16 @@ static void *hilo_radar(void *arg)
             const char *txt = "*** GAME OVER ***";
             int cy = mapa_off_y + MAPA_FILAS / 2;
             int cx = mapa_off_x + (MAPA_COLS - (int)strlen(txt)) / 2;
-            if (cx < mapa_off_x) cx = mapa_off_x;
+            if (cx < mapa_off_x)
+                cx = mapa_off_x;
             wattron(win_mapa, A_BOLD | A_REVERSE);
             mvwprintw(win_mapa, cy, cx, "%s", txt);
             wattroff(win_mapa, A_BOLD | A_REVERSE);
             if (g_game_over_motivo[0] != '\0')
             {
                 int mx = mapa_off_x + (MAPA_COLS - (int)strlen(g_game_over_motivo)) / 2;
-                if (mx < mapa_off_x) mx = mapa_off_x;
+                if (mx < mapa_off_x)
+                    mx = mapa_off_x;
                 wattron(win_mapa, A_BOLD);
                 mvwprintw(win_mapa, cy + 1, mx, "%s", g_game_over_motivo);
                 wattroff(win_mapa, A_BOLD);
@@ -836,10 +846,17 @@ static void *hilo_radar(void *arg)
             {
                 if (estaciones_local[e].pid == 0)
                     continue;
+
+                int activa = (estaciones_local[e].estado == ESTADO_ACTIVO);
+                int color = activa ? 1 : 2; /* 1=verde activa, 2=rojo "off" */
+
+                wattron(win_est, COLOR_PAIR(color));
                 mvwprintw(win_est, fila_info, 1, "#%d (%d,%d) D:%d%s",
                           e, estaciones_local[e].fila, estaciones_local[e].col,
                           estaciones_local[e].combustible,
-                          estaciones_local[e].estado == ESTADO_ACTIVO ? "" : " off");
+                          activa ? "" : " off");
+                wattroff(win_est, COLOR_PAIR(color));
+
                 fila_info++;
             }
         }
@@ -1656,6 +1673,7 @@ int main(int argc, char *argv[])
     pthread_mutex_lock(&mapa->mutex);
     mapa->naves[id_nave].combustible = NAVE_COMBUSTIBLE_INICIAL;
     mapa->naves[id_nave].oxigeno = NAVE_OXIGENO_INICIAL;
+    mapa->naves[id_nave].escudo = NAVE_ESCUDO_INICIAL;
     mapa->naves[id_nave].dinero = 0; /* arranca sin creditos: mina y vende para ganar (#44) */
     mapa->naves[id_nave].pid = getpid();
     pthread_mutex_unlock(&mapa->mutex);
@@ -1692,6 +1710,14 @@ int main(int argc, char *argv[])
 
     /* 5) Inicializar ncurses. */
     initscr();
+    if (has_colors())
+    {
+        start_color();
+        use_default_colors();          /* <-- agregar esto */
+        init_pair(1, COLOR_GREEN, -1); /* -1 = fondo por defecto de la terminal */
+        init_pair(2, COLOR_RED, -1);
+        init_pair(3, COLOR_YELLOW, -1);
+    }
     cbreak();
     noecho();
     curs_set(0); /* ocultar cursor */
@@ -1706,7 +1732,7 @@ int main(int argc, char *argv[])
     mascara_rueda |= BUTTON5_PRESSED;
 #endif
     mousemask(mascara_rueda, NULL);
-    mouseinterval(0); /* sin demora: respuesta inmediata de la rueda */
+    mouseinterval(0);      /* sin demora: respuesta inmediata de la rueda */
     nodelay(stdscr, TRUE); /* getch() no bloquea (lo usa el hilo de propulsion) */
     refresh();
 

@@ -9,6 +9,6 @@
  * Bloquea en un loop procesando mensajes hasta recibir SIGINT/SIGTERM.
  * Retorna 0 en cierre normal, -1 en error de inicializacion.
  */
-int registro_servidor_loop(Mapa *mapa, const Config *cfg);
+int registro_servidor_loop(Mapa *mapa, const Config *cfg, int cant_estaciones);
 
 #endif /* REGISTRO_H */

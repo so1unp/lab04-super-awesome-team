@@ -12,7 +12,7 @@
 #define DEFAULT_PRECIO_KERNELIO 25
 #define DEFAULT_PRECIO_COMBUSTIBLE 12
 #define DEFAULT_PRECIO_OXIGENO 8
-#define DEFAULT_UMBRAL_COMBUSTIBLE 30
+#define DEFAULT_UMBRAL_COMBUSTIBLE 100
 #define DEFAULT_INTERVALO_OXIGENO 1      /* segundos entre decrementos de oxigeno en nave */
 #define DEFAULT_INTERVALO_COMBUSTIBLE 10 /* segundos entre decrementos de combustible en estacion */
 #define DEFAULT_RADAR_REFRESH_MS 100     /* milisegundos entre refrescos del radar (ncurses) */
@@ -36,6 +36,7 @@
 #define NAVE_COMBUSTIBLE_INICIAL 100
 #define NAVE_OXIGENO_INICIAL 100
 #define ESTACION_COMBUSTIBLE_INICIAL 2000
+#define NAVE_ESCUDO_INICIAL true
 
 typedef struct
 {
